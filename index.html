@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>모바일뉴스리더 신규 가입자 보고 자동화</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css" />
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/l10n/ko.js"></script>
+</head>
+<body>
+  <main class="container">
+    <header>
+      <h1>모바일뉴스리더 신규 가입자 보고 자동화</h1>
+      <p class="subtitle">
+        전체사용자 엑셀을 업로드하여 일간 보고 문장을 생성합니다.<br />
+        엑셀 파일은 관리자화면(<a href="https://mng.yna.co.kr/mng/" target="_blank" rel="noopener">https://mng.yna.co.kr/mng/</a>) [ID관리 > 사용자리스트] 메뉴에서 다운받으세요.
+      </p>
+    </header>
+
+    <section class="two-col">
+      <div class="card">
+        <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="엑셀 파일 업로드">
+          <input type="file" id="fileInput" accept=".xlsx,.xls" hidden />
+          <div class="dropzone-inner">
+            <div class="dropzone-icon">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="38" height="38" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+            </div>
+            <div class="dropzone-text">
+              <strong>엑셀 파일을 이곳에 드롭</strong>하거나 <u>클릭하여 선택</u>, 또는<br />
+              파일 탐색기에서 파일 복사 후 <kbd>Ctrl</kbd>+<kbd>V</kbd>
+            </div>
+            <div class="dropzone-hint">.xlsx / .xls · 최대 15MB</div>
+          </div>
+        </div>
+
+        <div class="divider"><span>또는 관리자에서 자동 다운로드</span></div>
+
+        <button id="autoDownloadBtn" type="button" class="btn btn-primary btn-block" disabled>
+          관리자에서 자동 다운로드 & 분석 (준비중)
+        </button>
+        <div id="autoDownloadHint" class="field-hint"></div>
+      </div>
+
+      <div class="card">
+        <div class="field">
+          <label for="referenceTime">기준 시각 (집계 종료점)</label>
+          <div class="ref-time-row">
+            <div class="ref-time-input-wrap">
+              <input type="text" id="referenceTime" placeholder="yyyy-mm-dd hh:mm" autocomplete="off" />
+              <span id="currentTimeBadge" class="current-time-badge hidden">(현재 시각)</span>
+            </div>
+            <button id="resetNowBtn" type="button" class="btn btn-ghost">현재 시각</button>
+          </div>
+        </div>
+
+        <fieldset class="duration">
+          <legend>집계 시작점</legend>
+          <label class="radio">
+            <input type="radio" name="duration" value="lastReport" />
+            <span>
+              <strong>마지막 보고 시각부터</strong>
+              <span id="lastReportDisplay" class="field-hint"></span>
+            </span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="duration" value="todayMidnight" />
+            <span><strong>기준일 0시부터</strong></span>
+          </label>
+          <label class="radio">
+            <input type="radio" name="duration" value="last24h" />
+            <span><strong>기준 시각 24시간 전부터</strong></span>
+          </label>
+        </fieldset>
+      </div>
+    </section>
+
+    <section id="status" class="status hidden"></section>
+
+    <section id="resultSection" class="card result-section hidden">
+      <div class="result-header">
+        <h2>일간 보고 문장</h2>
+        <div class="result-actions">
+          <button id="copyBtn" class="btn btn-ghost" type="button">복사</button>
+          <div class="save-wrap">
+            <button id="saveRecordBtn" class="btn btn-primary" type="button">보고 기록으로 저장</button>
+            <div id="savePopover" class="popover hidden" role="dialog" aria-modal="false" aria-labelledby="popoverTitle">
+              <h3 id="popoverTitle" class="popover-title">보고 기록으로 저장</h3>
+              <label class="popover-label" for="popoverAuthorInput">작성자 이름</label>
+              <input type="text" id="popoverAuthorInput" placeholder="예: 홍길동" autocomplete="name" />
+              <p id="popoverHint" class="popover-hint"></p>
+              <div class="popover-actions">
+                <button id="popoverCancelBtn" type="button" class="btn btn-ghost btn-sm">취소</button>
+                <button id="popoverConfirmBtn" type="button" class="btn btn-primary btn-sm">저장</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <pre id="resultText" class="result-text"></pre>
+      <details class="debug">
+        <summary>상세 집계 보기</summary>
+        <div id="debugArea"></div>
+      </details>
+    </section>
+
+    <section class="card history-section">
+      <div class="history-header">
+        <h2>보고 기록</h2>
+        <button id="clearHistoryBtn" class="btn btn-ghost btn-sm" type="button">전체 삭제</button>
+      </div>
+      <div id="historyList" class="history-list">
+        <p class="empty">아직 저장된 기록이 없습니다.</p>
+      </div>
+    </section>
+  </main>
+
+  <script src="rank-config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
