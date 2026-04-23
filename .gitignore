@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# Claude / dev tooling
+.claude/
+.omc/
+
+# 내부 메모 (배포 대상 아님)
+_thinking/
+
+# 개발용 보조 스크립트 / 테스트 파일
+test_logic.js
+generate_sample.py
+sample_users.xlsx
