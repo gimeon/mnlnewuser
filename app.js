@@ -13,11 +13,9 @@ const COLUMN_MAP = {
 };
 
 const REPORT_HEADER_LABEL = '모바일 뉴스리더 제공';
-// 관리자 페이지의 엑셀 다운로드 엔드포인트. 회사망 브라우저 세션이 있어야 접근 가능.
-const ADMIN_EXPORT_URL = 'https://mng.yna.co.kr/mng/idgrouplist/exceldownload';
 const HISTORY_KEY = 'dailyReportHistory_v1';
 const LAST_AUTHOR_KEY = 'dailyReportLastAuthor_v1';
-const HISTORY_MAX_ITEMS = 50;
+const HISTORY_MAX_ITEMS = 10;
 const MAX_FILE_SIZE_MB = 15;
 
 // ============================================================================
@@ -33,13 +31,12 @@ const DROPZONE          = $('dropzone');
 const FILE_INPUT        = $('fileInput');
 const COPY_BTN          = $('copyBtn');
 const SAVE_RECORD_BTN   = $('saveRecordBtn');
-const REF_TIME_INPUT    = $('referenceTime');
-const RESET_NOW_BTN     = $('resetNowBtn');
-const AUTO_DL_BTN       = $('autoDownloadBtn');
-const AUTO_DL_HINT      = $('autoDownloadHint');
 const HISTORY_LIST      = $('historyList');
-const CLEAR_HISTORY_BTN = $('clearHistoryBtn');
 const LAST_REPORT_DISP  = $('lastReportDisplay');
+const FILE_LOADED       = $('fileLoaded');
+const LOADED_FILE_NAME  = $('loadedFileName');
+const LOADED_FILE_META  = $('loadedFileMeta');
+const REMOVE_FILE_BTN   = $('removeFileBtn');
 const SAVE_POPOVER      = $('savePopover');
 const POPOVER_AUTHOR    = $('popoverAuthorInput');
 const POPOVER_HINT      = $('popoverHint');
@@ -54,12 +51,25 @@ let isBusy = false;         // 파일 로드/파싱 중이면 true
 function setBusy(flag) {
   isBusy = flag;
   document.body.classList.toggle('is-busy', flag);
-  // AUTO_DL_BTN은 "(준비중)" 상태로 항상 disabled — setBusy 토글 대상에서 제외
-  [SAVE_RECORD_BTN, COPY_BTN, RESET_NOW_BTN, CLEAR_HISTORY_BTN, FILE_INPUT].forEach((el) => { if (el) el.disabled = flag; });
-  REF_TIME_INPUT.disabled = flag;
-  if (flag) refTimePicker._input.setAttribute('readonly', true);
-  else refTimePicker._input.removeAttribute('readonly');
-  document.querySelectorAll('input[name="duration"]').forEach((el) => { el.disabled = flag || (el.value === 'lastReport' && !getLastReportTime()); });
+  [FILE_INPUT, REMOVE_FILE_BTN].forEach((el) => { if (el) el.disabled = flag; });
+  if (flag) {
+    SAVE_RECORD_BTN.disabled = true;
+    COPY_BTN.disabled = true;
+  } else {
+    const hasReport = !!currentReport;
+    SAVE_RECORD_BTN.disabled = !hasReport;
+    COPY_BTN.disabled = !hasReport;
+  }
+  const startBtn = document.getElementById('startChangeBtn');
+  const endBtn = document.getElementById('endChangeBtn');
+  if (startBtn) startBtn.disabled = flag;
+  if (endBtn) endBtn.disabled = flag;
+  document.querySelectorAll('input[name="startPoint"]').forEach((el) => {
+    el.disabled = flag || (el.value === 'lastReport' && !getLastReportTime());
+  });
+  document.querySelectorAll('input[name="endPoint"]').forEach((el) => {
+    el.disabled = flag;
+  });
 }
 
 // 브라우저가 status 메시지를 실제로 페인트할 수 있도록 다음 프레임까지 양보
@@ -73,8 +83,10 @@ function yieldToUI() {
 
 const pad = (n) => String(n).padStart(2, '0');
 
+const WEEKDAYS_KO = ['일', '월', '화', '수', '목', '금', '토'];
 function formatLocalFull(d) {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const dow = WEEKDAYS_KO[d.getDay()];
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}(${dow}) ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function formatDuration(startMs, endMs) {
@@ -155,109 +167,331 @@ function getLastReportTime() {
 }
 
 // ============================================================================
-// 기준 시각 / 기간 선택
+// 집계 시작점 / 종료점 선택
 // ============================================================================
 
-const CURRENT_TIME_BADGE = $('currentTimeBadge');
-function showCurrentBadge() { CURRENT_TIME_BADGE.classList.remove('hidden'); }
-function hideCurrentBadge() { CURRENT_TIME_BADGE.classList.add('hidden'); }
+const CUSTOM_START_INPUT = $('customStartTime');
+const CUSTOM_END_INPUT   = $('customEndTime');
+const CUSTOM_START_WRAP  = document.querySelector('.custom-start-wrap');
+const CUSTOM_END_WRAP    = document.querySelector('.custom-end-wrap');
+const START_POPOVER      = $('startPopover');
+const END_POPOVER        = $('endPopover');
+const START_CHANGE_BTN   = $('startChangeBtn');
+const END_CHANGE_BTN     = $('endChangeBtn');
+const START_POINT_TEXT   = $('startPointText');
+const START_POINT_HINT   = $('startPointHint');
+const END_POINT_TEXT     = $('endPointText');
+const END_POINT_HINT     = $('endPointHint');
+const PERIOD_SUMMARY     = $('periodSummary');
 
-// flatpickr 인스턴스 (yyyy-mm-dd hh:mm 포맷으로 datetime 선택)
-const refTimePicker = flatpickr(REF_TIME_INPUT, {
-  locale: 'ko',
-  enableTime: true,
-  time_24hr: true,
-  dateFormat: 'Y-m-d H:i',
-  allowInput: true,
-  minuteIncrement: 10,
-  defaultDate: new Date(),
-  onChange: () => { hideCurrentBadge(); if (currentRows) renderReport(); },
-});
+let currentFileMeta = null; // { name, lastModified }
 
-// 달력 하단에 빠른 시각 프리셋 버튼을 주입한다.
-refTimePicker.config.onReady.push((dates, str, fp) => {
-  if (fp.calendarContainer.querySelector('.fp-time-presets')) return;
-  const presets = [
-    { label: '지금', apply: (d) => { const n = new Date(); d.setHours(n.getHours(), n.getMinutes(), 0, 0); } },
-    { label: '00:00', h: 0,  m: 0 },
-    { label: '09:00', h: 9,  m: 0 },
-    { label: '13:00', h: 13, m: 0 },
-    { label: '16:00', h: 16, m: 0 },
-    { label: '18:00', h: 18, m: 0 },
-  ];
-  const wrap = document.createElement('div');
-  wrap.className = 'fp-time-presets';
-  presets.forEach((p) => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'fp-preset-btn';
-    btn.textContent = p.label;
-    btn.addEventListener('click', (e) => {
-      e.preventDefault();
-      const cur = fp.selectedDates[0] ? new Date(fp.selectedDates[0]) : new Date();
-      if (p.apply) p.apply(cur);
-      else cur.setHours(p.h, p.m, 0, 0);
-      fp.setDate(cur, true);
-    });
-    wrap.appendChild(btn);
-  });
-  fp.calendarContainer.appendChild(wrap);
-});
-refTimePicker.config.onReady.forEach((fn) => fn(refTimePicker.selectedDates, '', refTimePicker));
+const START_LABELS = {
+  lastReport: '마지막 보고 시각부터',
+  endZero:    '종료일 0시부터',
+  last24h:    '종료점 24시간 전부터',
+  custom:     '직접 설정',
+};
+const END_LABELS = {
+  fileModified: '파일 최종 수정일까지',
+  now:          '현재 시각까지',
+  custom:       '직접 설정',
+};
 
-function initReferenceTime() {
-  refTimePicker.setDate(new Date(), false);
-  showCurrentBadge();
+function getSelectedStartOption() {
+  const el = document.querySelector('input[name="startPoint"]:checked');
+  return el ? el.value : null;
 }
-// 페이지 로드 시엔 기본값이 현재 시각이므로 배지 표시
-showCurrentBadge();
-
-function getReferenceDate() {
-  const d = refTimePicker.selectedDates && refTimePicker.selectedDates[0];
-  return d ? new Date(d) : new Date();
-}
-
-function getSelectedDurationOption() {
-  const el = document.querySelector('input[name="duration"]:checked');
+function getSelectedEndOption() {
+  const el = document.querySelector('input[name="endPoint"]:checked');
   return el ? el.value : null;
 }
 
-function computeStartDate(refDate) {
-  const opt = getSelectedDurationOption();
-  if (opt === 'lastReport') {
-    return getLastReportTime();
-  }
-  if (opt === 'todayMidnight') {
-    const d = new Date(refDate);
-    d.setHours(0, 0, 0, 0);
-    return d;
-  }
-  if (opt === 'last24h') {
-    return new Date(refDate.getTime() - 24 * 3600 * 1000);
+function getEndPoint() {
+  const opt = getSelectedEndOption();
+  if (opt === 'fileModified') return currentFileMeta ? new Date(currentFileMeta.lastModified) : null;
+  if (opt === 'now') return new Date();
+  if (opt === 'custom') {
+    const d = customEndPicker.selectedDates && customEndPicker.selectedDates[0];
+    return d ? new Date(d) : null;
   }
   return null;
 }
 
-function refreshDurationUI() {
-  const last = getLastReportTime();
-  const lastReportRadio = document.querySelector('input[name="duration"][value="lastReport"]');
-  if (last) {
-    lastReportRadio.disabled = false;
-    LAST_REPORT_DISP.innerHTML = `(마지막 보고: <span class="accent-latest">${escapeHtml(formatLocalFull(last))}</span>)`;
-  } else {
-    lastReportRadio.disabled = true;
-    LAST_REPORT_DISP.textContent = '(아직 저장된 보고 없음)';
-    if (lastReportRadio.checked) {
-      document.querySelector('input[name="duration"][value="last24h"]').checked = true;
-    }
+function getStartPoint(endDate) {
+  const opt = getSelectedStartOption();
+  if (opt === 'lastReport') return getLastReportTime();
+  if (opt === 'endZero') {
+    if (!endDate) return null;
+    const d = new Date(endDate); d.setHours(0, 0, 0, 0); return d;
   }
-  // 기본 선택: 기록 있으면 lastReport, 없으면 last24h
-  const anyChecked = document.querySelector('input[name="duration"]:checked');
-  if (!anyChecked) {
-    const target = last ? 'lastReport' : 'last24h';
-    document.querySelector(`input[name="duration"][value="${target}"]`).checked = true;
+  if (opt === 'last24h') {
+    if (!endDate) return null;
+    return new Date(endDate.getTime() - 24 * 3600 * 1000);
+  }
+  if (opt === 'custom') {
+    const d = customStartPicker.selectedDates && customStartPicker.selectedDates[0];
+    return d ? new Date(d) : null;
+  }
+  return null;
+}
+
+// flatpickr 인스턴스 (시작점 / 종료점 직접 설정용)
+const customStartPicker = flatpickr(CUSTOM_START_INPUT, {
+  locale: 'ko', enableTime: true, time_24hr: true,
+  dateFormat: 'Y-m-d(D) H:i', allowInput: true, minuteIncrement: 10,
+  onChange: () => {
+    updateStartPointSummary();
+    updatePeriodSummary();
+    if (currentRows) renderReport();
+    if (getSelectedStartOption() === 'custom') closeAllPeriodPopovers();
+  },
+});
+const customEndPicker = flatpickr(CUSTOM_END_INPUT, {
+  locale: 'ko', enableTime: true, time_24hr: true,
+  dateFormat: 'Y-m-d(D) H:i', allowInput: true, minuteIncrement: 10,
+  onChange: () => {
+    updateEndPointSummary();
+    updateStartPointSummary();
+    updateStartPointHints();
+    updatePeriodSummary();
+    if (currentRows) renderReport();
+    if (getSelectedEndOption() === 'custom') closeAllPeriodPopovers();
+  },
+});
+
+// ---- 요약 라인 업데이트 ----
+function updateStartPointSummary() {
+  if (!START_POINT_TEXT) return;
+  const opt = getSelectedStartOption();
+  const endDate = getEndPoint();
+  let hint = '';
+  if (opt === 'lastReport') {
+    const last = getLastReportTime();
+    hint = last ? formatLocalFull(last) : '아직 저장된 보고 없음';
+  } else if (opt === 'endZero') {
+    if (endDate) { const d = new Date(endDate); d.setHours(0, 0, 0, 0); hint = formatLocalFull(d); }
+    else hint = '종료점 필요';
+  } else if (opt === 'last24h') {
+    hint = endDate ? formatLocalFull(new Date(endDate.getTime() - 24 * 3600 * 1000)) : '종료점 필요';
+  } else if (opt === 'custom') {
+    const d = customStartPicker.selectedDates[0];
+    hint = d ? formatLocalFull(d) : '시각 선택 필요';
+  }
+  START_POINT_TEXT.textContent = START_LABELS[opt] || '-';
+  START_POINT_HINT.textContent = hint;
+  START_POINT_HINT.classList.remove('accent-latest');
+}
+
+function updateEndPointSummary() {
+  if (!END_POINT_TEXT) return;
+  const opt = getSelectedEndOption();
+  let hint = '';
+  if (opt === 'fileModified') {
+    hint = currentFileMeta ? formatLocalFull(new Date(currentFileMeta.lastModified)) : '파일 업로드 필요';
+  } else if (opt === 'now') {
+    hint = formatLocalFull(new Date());
+  } else if (opt === 'custom') {
+    const d = customEndPicker.selectedDates[0];
+    hint = d ? formatLocalFull(d) : '시각 선택 필요';
+  }
+  END_POINT_TEXT.textContent = END_LABELS[opt] || '-';
+  END_POINT_HINT.textContent = hint;
+}
+
+// ---- 팝오버 내부 hint ----
+function updateStartPointHints() {
+  const endDate = getEndPoint();
+  const last = getLastReportTime();
+  if (last) {
+    LAST_REPORT_DISP.innerHTML = `<span class="latest-badge">마지막</span> ${escapeHtml(formatLocalFull(last))}`;
+  } else {
+    LAST_REPORT_DISP.textContent = '(아직 저장된 보고 없음)';
+  }
+  const endZeroEl = $('endZeroDisplay');
+  const last24hEl = $('last24hDisplay');
+  if (endZeroEl) {
+    if (endDate) { const d = new Date(endDate); d.setHours(0, 0, 0, 0); endZeroEl.textContent = `(${formatLocalFull(d)})`; }
+    else endZeroEl.textContent = '';
+  }
+  if (last24hEl) {
+    last24hEl.textContent = endDate ? `(${formatLocalFull(new Date(endDate.getTime() - 24 * 3600 * 1000))})` : '';
   }
 }
+
+function updateEndPointHints() {
+  const fileModEl = $('fileModifiedDisplay');
+  const nowEl = $('nowDisplay');
+  if (fileModEl) fileModEl.textContent = currentFileMeta ? `(${formatLocalFull(new Date(currentFileMeta.lastModified))})` : '(파일 없음)';
+  if (nowEl) nowEl.textContent = `(${formatLocalFull(new Date())})`;
+}
+
+function updatePeriodSummary() {
+  if (!PERIOD_SUMMARY) return;
+  const endDate = getEndPoint();
+  const startDate = getStartPoint(endDate);
+  PERIOD_SUMMARY.classList.remove('error');
+  if (!endDate) {
+    PERIOD_SUMMARY.innerHTML = '<em>왼쪽의 업로드 영역에 엑셀 파일을 올려주세요</em>';
+    return;
+  }
+  if (!startDate) {
+    PERIOD_SUMMARY.innerHTML = '<em>집계 시작점을 설정해 주세요</em>';
+    return;
+  }
+  if (startDate.getTime() >= endDate.getTime()) {
+    PERIOD_SUMMARY.textContent = '시작 시각이 종료 시각보다 늦거나 같습니다.';
+    PERIOD_SUMMARY.classList.add('error');
+    return;
+  }
+  const dur = formatDuration(startDate.getTime(), endDate.getTime());
+  PERIOD_SUMMARY.innerHTML = `<strong>${escapeHtml(formatLocalFull(startDate))}</strong> ~ <strong>${escapeHtml(formatLocalFull(endDate))}</strong> (${escapeHtml(dur)})`;
+}
+
+// ---- 팝오버 토글 (시작점/종료점 상호 배타) ----
+let openPeriodPopover = null;
+let periodOutsideHandler = null;
+
+function openStartPopover() {
+  closeAllPeriodPopovers();
+  START_POPOVER.classList.remove('hidden');
+  START_CHANGE_BTN.classList.add('is-open');
+  START_CHANGE_BTN.textContent = '닫기';
+  openPeriodPopover = 'start';
+  attachPeriodOutside();
+}
+function openEndPopover() {
+  closeAllPeriodPopovers();
+  END_POPOVER.classList.remove('hidden');
+  END_CHANGE_BTN.classList.add('is-open');
+  END_CHANGE_BTN.textContent = '닫기';
+  openPeriodPopover = 'end';
+  attachPeriodOutside();
+}
+function closeAllPeriodPopovers() {
+  START_POPOVER.classList.add('hidden');
+  END_POPOVER.classList.add('hidden');
+  START_CHANGE_BTN.classList.remove('is-open');
+  END_CHANGE_BTN.classList.remove('is-open');
+  START_CHANGE_BTN.textContent = '변경';
+  END_CHANGE_BTN.textContent = '변경';
+  openPeriodPopover = null;
+  detachPeriodOutside();
+}
+function attachPeriodOutside() {
+  periodOutsideHandler = (e) => {
+    const inside = START_POPOVER.contains(e.target) || END_POPOVER.contains(e.target)
+                || START_CHANGE_BTN.contains(e.target) || END_CHANGE_BTN.contains(e.target);
+    if (inside) return;
+    closeAllPeriodPopovers();
+  };
+  setTimeout(() => {
+    document.addEventListener('mousedown', periodOutsideHandler);
+    document.addEventListener('keydown', periodEscHandler);
+  }, 0);
+}
+function detachPeriodOutside() {
+  if (periodOutsideHandler) {
+    document.removeEventListener('mousedown', periodOutsideHandler);
+    periodOutsideHandler = null;
+  }
+  document.removeEventListener('keydown', periodEscHandler);
+}
+function periodEscHandler(e) { if (e.key === 'Escape') closeAllPeriodPopovers(); }
+
+START_CHANGE_BTN.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (openPeriodPopover === 'start') closeAllPeriodPopovers();
+  else openStartPopover();
+});
+END_CHANGE_BTN.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (openPeriodPopover === 'end') closeAllPeriodPopovers();
+  else openEndPopover();
+});
+
+// ---- 직접 설정 인풋 가시성 ----
+function toggleCustomStartVisibility() {
+  if (!CUSTOM_START_WRAP) return;
+  CUSTOM_START_WRAP.classList.toggle('is-active', getSelectedStartOption() === 'custom');
+  if (getSelectedStartOption() === 'custom' && !customStartPicker.selectedDates[0]) {
+    setTimeout(() => customStartPicker.open(), 0);
+  }
+}
+function toggleCustomEndVisibility() {
+  if (!CUSTOM_END_WRAP) return;
+  CUSTOM_END_WRAP.classList.toggle('is-active', getSelectedEndOption() === 'custom');
+  if (getSelectedEndOption() === 'custom' && !customEndPicker.selectedDates[0]) {
+    setTimeout(() => customEndPicker.open(), 0);
+  }
+}
+
+// ---- 라디오 변경 리스너 ----
+document.querySelectorAll('input[name="startPoint"]').forEach((el) => {
+  el.addEventListener('change', () => {
+    toggleCustomStartVisibility();
+    updateStartPointSummary();
+    updateStartPointHints();
+    updatePeriodSummary();
+    if (currentRows) renderReport();
+    if (!(getSelectedStartOption() === 'custom' && !customStartPicker.selectedDates[0])) closeAllPeriodPopovers();
+  });
+});
+document.querySelectorAll('input[name="endPoint"]').forEach((el) => {
+  el.addEventListener('change', () => {
+    toggleCustomEndVisibility();
+    updateEndPointSummary();
+    updateStartPointSummary();
+    updateStartPointHints();
+    updateEndPointHints();
+    updatePeriodSummary();
+    if (currentRows) renderReport();
+    if (!(getSelectedEndOption() === 'custom' && !customEndPicker.selectedDates[0])) closeAllPeriodPopovers();
+  });
+});
+
+function refreshStartPointUI() {
+  const last = getLastReportTime();
+  const lastRadio = document.querySelector('input[name="startPoint"][value="lastReport"]');
+  if (last) lastRadio.disabled = false;
+  else {
+    lastRadio.disabled = true;
+    if (lastRadio.checked) document.querySelector('input[name="startPoint"][value="last24h"]').checked = true;
+  }
+  if (!document.querySelector('input[name="startPoint"]:checked')) {
+    const target = last ? 'lastReport' : 'last24h';
+    document.querySelector(`input[name="startPoint"][value="${target}"]`).checked = true;
+  }
+}
+
+function refreshEndPointUI() {
+  // '파일 최종 수정일까지'는 항상 기본/선택 가능. 파일 없으면 요약에 힌트만 표시.
+  const fileRadio = document.querySelector('input[name="endPoint"][value="fileModified"]');
+  fileRadio.disabled = false;
+  if (!document.querySelector('input[name="endPoint"]:checked')) {
+    fileRadio.checked = true;
+  }
+}
+
+function refreshPeriodUI() {
+  refreshStartPointUI();
+  refreshEndPointUI();
+  updateStartPointHints();
+  updateEndPointHints();
+  updateStartPointSummary();
+  updateEndPointSummary();
+  updatePeriodSummary();
+}
+
+// 'now' 옵션 사용 중일 땐 30초마다 UI 갱신
+setInterval(() => {
+  if (getSelectedEndOption() === 'now') {
+    updateEndPointHints();
+    updateEndPointSummary();
+    updateStartPointSummary();
+    updatePeriodSummary();
+  }
+}, 30_000);
 
 // ============================================================================
 // 상태 메시지
@@ -269,10 +503,6 @@ function setStatus(message, variant = 'info') {
   STATUS_EL.classList.remove('hidden');
 }
 
-function setAutoDlHint(message, variant = '') {
-  AUTO_DL_HINT.textContent = message;
-  AUTO_DL_HINT.className = `field-hint ${variant}`;
-}
 
 // ============================================================================
 // 파일 업로드 (드롭존/파일 선택)
@@ -332,7 +562,11 @@ async function handleFile(file) {
 
     setStatus(`② 엑셀 분석 중… (${sizeMBstr}MB · 10~30초 소요 가능, 이 동안 다른 액션은 잠시 막혀요)`, 'info');
     await yieldToUI();
+    // 파일 메타 저장 (기본 종료점이 '파일 최종 수정일까지'로 이미 맞춰짐)
+    currentFileMeta = { name: file.name, lastModified: file.lastModified };
+    refreshPeriodUI();
     await parseAndRender(buffer);
+    showFileLoaded(file);
   } catch (err) {
     console.error(err);
     setStatus(`파일을 읽을 수 없습니다: ${err.message}`, 'error');
@@ -352,70 +586,45 @@ async function parseAndRender(buffer) {
 }
 
 // ============================================================================
-// 자동 다운로드 (관리자 API → fetch → parse)
+// 파일 제거 버튼 — 업로드된 파일 정보 초기화
 // ============================================================================
 
-let downloadController = null;
-
-AUTO_DL_BTN.addEventListener('click', async () => {
-  if (downloadController) {
-    downloadController.abort();
-    downloadController = null;
-    AUTO_DL_BTN.textContent = '관리자에서 자동 다운로드 & 분석';
-    setAutoDlHint('취소됨', '');
-    return;
-  }
+REMOVE_FILE_BTN.addEventListener('click', () => {
   if (isBusy) return;
-  setBusy(true);
-
-  downloadController = new AbortController();
-  AUTO_DL_BTN.disabled = false;   // 다운로드 중에는 취소 가능해야 하므로 다시 활성화
-  AUTO_DL_BTN.textContent = '취소';
-  const startTs = Date.now();
-  const interval = setInterval(() => {
-    const s = Math.floor((Date.now() - startTs) / 1000);
-    setAutoDlHint(`다운로드 진행 중… (${Math.floor(s / 60)}분 ${s % 60}초) · 보통 5분 내외 소요`, '');
-  }, 1000);
-
-  try {
-    setStatus('관리자 서버에서 엑셀을 받아오는 중입니다. 최대 5~6분이 걸릴 수 있어요.', 'info');
-    const res = await fetch(ADMIN_EXPORT_URL, {
-      method: 'GET',
-      credentials: 'include',
-      signal: downloadController.signal,
-    });
-
-    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-
-    const contentType = res.headers.get('Content-Type') || '';
-    if (/text\/html/i.test(contentType)) {
-      throw new Error('HTML 응답이 돌아왔습니다. 세션이 만료됐을 수 있어요 — 관리자 페이지에 다시 로그인한 뒤 시도해 주세요.');
-    }
-
-    const buffer = await res.arrayBuffer();
-    setAutoDlHint(`${(buffer.byteLength / 1024 / 1024).toFixed(1)}MB 받음. 분석 중…`, '');
-    await yieldToUI();
-    await parseAndRender(buffer);
-    setAutoDlHint('자동 다운로드 완료.', 'success');
-  } catch (err) {
-    console.error(err);
-    const msg = (err && err.name === 'AbortError') ? '사용자가 취소했습니다.' : err.message || String(err);
-    // CORS로 차단된 경우 TypeError로 나오는 경우가 많음
-    const isCors = err && err.name === 'TypeError';
-    if (isCors) {
-      setAutoDlHint('자동 다운로드 차단됨 — 브라우저 CORS 정책. 아래 "새 탭에서 열기" 링크로 받거나, 업로드 방식을 쓰세요.', 'error');
-      setStatus('자동 다운로드 실패 (CORS). 새 탭에서 직접 받으시거나 파일 업로드로 진행해 주세요.', 'error');
-    } else {
-      setAutoDlHint(`자동 다운로드 실패: ${msg}`, 'error');
-      setStatus(`자동 다운로드 실패: ${msg}`, 'error');
-    }
-  } finally {
-    clearInterval(interval);
-    downloadController = null;
-    AUTO_DL_BTN.textContent = '관리자에서 자동 다운로드 & 분석';
-    setBusy(false);
+  const hasReport = !!currentReport;
+  if (hasReport) {
+    if (!confirm('파일을 제거하면 현재 생성된 보고 문장도 함께 초기화됩니다. 진행할까요?')) return;
   }
+  currentRows = null;
+  currentReport = null;
+  currentFileMeta = null;
+  FILE_LOADED.classList.add('hidden');
+  DROPZONE.classList.remove('hidden');
+  FILE_INPUT.value = '';
+  refreshPeriodUI();
+  resetResultToEmpty();
+  setStatus('파일이 제거되었습니다.', 'info');
 });
+
+function resetResultToEmpty() {
+  RESULT_SECTION.classList.add('is-empty');
+  RESULT_TEXT.textContent = '엑셀 파일을 업로드하고 집계 기간을 설정하면 여기에 일간 보고 문장이 생성됩니다.';
+  DEBUG_AREA.innerHTML = '';
+  SAVE_RECORD_BTN.disabled = true;
+  COPY_BTN.disabled = true;
+}
+
+function showFileLoaded(file) {
+  LOADED_FILE_NAME.textContent = file.name;
+  const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+  let metaText = `${sizeMB}MB`;
+  if (file.lastModified) {
+    metaText += ` · 최종 수정일 ${formatLocalFull(new Date(file.lastModified))}`;
+  }
+  LOADED_FILE_META.textContent = metaText;
+  DROPZONE.classList.add('hidden');
+  FILE_LOADED.classList.remove('hidden');
+}
 
 // ============================================================================
 // 엑셀 → 정규화
@@ -565,21 +774,21 @@ function buildReport(rows, startDate, endDate) {
 
 function renderReport() {
   if (!currentRows) return;
-  const endDate = getReferenceDate();
-  const startDate = computeStartDate(endDate);
-  if (!startDate) {
-    setStatus('집계 기간 시작점을 선택해 주세요.', 'error');
-    return;
-  }
+  const endDate = getEndPoint();
+  if (!endDate) { setStatus('집계 종료점을 설정해 주세요.', 'error'); return; }
+  const startDate = getStartPoint(endDate);
+  if (!startDate) { setStatus('집계 시작점을 설정해 주세요.', 'error'); return; }
   if (startDate.getTime() >= endDate.getTime()) {
-    setStatus('시작 시각이 기준(종료) 시각보다 이후입니다. 선택을 확인해 주세요.', 'error');
+    setStatus('시작 시각이 종료 시각보다 늦거나 같습니다.', 'error');
     return;
   }
   const report = buildReport(currentRows, startDate, endDate);
   currentReport = { ...report, startDate, endDate };
 
-  RESULT_SECTION.classList.remove('hidden');
+  RESULT_SECTION.classList.remove('is-empty');
   RESULT_TEXT.textContent = report.text;
+  SAVE_RECORD_BTN.disabled = false;
+  COPY_BTN.disabled = false;
   renderDebugTable(report.entries);
 
   const windowLabel = `${formatLocalFull(startDate)} ~ ${formatLocalFull(endDate)}`;
@@ -696,7 +905,7 @@ async function confirmSavePopover() {
   try {
     await saveHistoryEntry(entry);
     renderHistoryList();
-    refreshDurationUI();
+    refreshPeriodUI();
     closeSavePopover();
     setStatus(`저장됐습니다. (${entry.author} · 기준 ${formatLocalFull(new Date(entry.createdAt))})`, 'success');
   } finally {
@@ -716,17 +925,8 @@ POPOVER_AUTHOR.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { e.preventDefault(); confirmSavePopover(); }
 });
 
-CLEAR_HISTORY_BTN.addEventListener('click', async () => {
-  if (!confirm('저장된 모든 보고 기록을 삭제할까요? 되돌릴 수 없습니다.')) return;
-  CLEAR_HISTORY_BTN.disabled = true;
-  try {
-    await clearAllHistory();
-    renderHistoryList();
-    refreshDurationUI();
-  } finally {
-    CLEAR_HISTORY_BTN.disabled = false;
-  }
-});
+
+let historyShowAll = false;
 
 function renderHistoryList() {
   const list = _historyCache;
@@ -734,19 +934,19 @@ function renderHistoryList() {
     HISTORY_LIST.innerHTML = '<p class="empty">아직 저장된 기록이 없습니다.</p>';
     return;
   }
-  HISTORY_LIST.innerHTML = list.map((e, idx) => {
+  const visible = historyShowAll ? list : list.slice(0, 2);
+  const itemsHtml = visible.map((e, idx) => {
     const winStart = formatLocalFull(new Date(e.startAt));
     const winEnd = formatLocalFull(new Date(e.endAt));
     const duration = formatDuration(new Date(e.startAt).getTime(), new Date(e.endAt).getTime());
     const savedTs = e.savedAt ? formatLocalFull(new Date(e.savedAt)) : '';
     const savedFooter = savedTs ? `<div class="history-footer">이 보고는 ${escapeHtml(savedTs)}에 저장되었습니다.</div>` : '';
-    const winEndHtml = idx === 0
-      ? `<span class="accent-latest">${escapeHtml(winEnd)}</span>`
-      : escapeHtml(winEnd);
+    const winEndHtml = escapeHtml(winEnd);
+    const latestBadge = idx === 0 ? '<span class="latest-badge">마지막</span>' : '';
     return `
-      <div class="history-item">
+      <div class="history-item${idx === 0 ? ' is-latest' : ''}">
         <div class="history-meta">
-          <strong>${escapeHtml(e.author)}</strong> 집계 기간: ${escapeHtml(winStart)} ~ ${winEndHtml} (${escapeHtml(duration)}), ${e.newCount}명 / ${e.orgCount}개 기관
+          ${latestBadge}<strong>${escapeHtml(e.author)}</strong> 집계 기간: ${escapeHtml(winStart)} ~ ${winEndHtml} (${escapeHtml(duration)}), ${e.newCount}명 / ${e.orgCount}개 기관
         </div>
         <details class="history-toggle">
           <summary></summary>
@@ -755,15 +955,34 @@ function renderHistoryList() {
         ${savedFooter}
       </div>`;
   }).join('');
+
+  let moreBtn = '';
+  if (list.length > 2) {
+    const label = historyShowAll ? '접기' : `전체 보기 (${list.length - 2}개 더)`;
+    moreBtn = `<button id="historyShowAllBtn" class="history-show-all-btn" type="button">${label}</button>`;
+  }
+  HISTORY_LIST.innerHTML = itemsHtml + moreBtn;
+  const btn = $('historyShowAllBtn');
+  if (btn) btn.addEventListener('click', () => { historyShowAll = !historyShowAll; renderHistoryList(); });
+  return;
 }
 
 // ============================================================================
 // 이벤트 바인딩 / 초기화
 // ============================================================================
 
-RESET_NOW_BTN.addEventListener('click', () => { initReferenceTime(); if (currentRows) renderReport(); });
 document.querySelectorAll('input[name="duration"]').forEach((el) => {
-  el.addEventListener('change', () => { if (currentRows) renderReport(); });
+  el.addEventListener('change', () => {
+    toggleCustomStartVisibility();
+    updateStartPointSummary();
+    updatePeriodSummary();
+    if (currentRows) renderReport();
+    // 직접 설정은 날짜 선택 전까지 펼친 상태 유지 (아래 customStartPicker.onChange에서 닫음)
+    const opt = getSelectedDurationOption();
+    if (!(opt === 'custom' && !customStartPicker.selectedDates[0])) {
+      collapseDuration();
+    }
+  });
 });
 
 function escapeHtml(s) {
@@ -773,6 +992,8 @@ function escapeHtml(s) {
 // 초기 렌더 — API에서 기록 불러온 뒤 UI 업데이트
 (async () => {
   await loadHistory();
-  refreshDurationUI();
+  refreshPeriodUI();
+  toggleCustomStartVisibility();
+  toggleCustomEndVisibility();
   renderHistoryList();
 })();

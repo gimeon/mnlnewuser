@@ -13,8 +13,19 @@ const DDL = `
   );
 `;
 
+const MAX_ITEMS = 10;
+
 async function ensureTable(db) {
   await db.prepare(DDL).run();
+}
+
+async function trimOldRows(db) {
+  // 최신 MAX_ITEMS 개만 남기고 나머지 삭제
+  await db.prepare(
+    `DELETE FROM reports WHERE id NOT IN (
+       SELECT id FROM reports ORDER BY created_at DESC, id DESC LIMIT ?
+     )`
+  ).bind(MAX_ITEMS).run();
 }
 
 function json(body, status = 200) {
@@ -30,7 +41,8 @@ export async function onRequestGet(context) {
   try {
     await ensureTable(db);
     const { results } = await db
-      .prepare(`SELECT id, data FROM reports ORDER BY created_at DESC, id DESC LIMIT 200`)
+      .prepare(`SELECT id, data FROM reports ORDER BY created_at DESC, id DESC LIMIT ?`)
+      .bind(MAX_ITEMS)
       .all();
     const items = results.map((r) => ({ id: r.id, ...JSON.parse(r.data) }));
     return json(items);
@@ -54,6 +66,7 @@ export async function onRequestPost(context) {
       .prepare(`INSERT INTO reports (data, created_at) VALUES (?, ?)`)
       .bind(JSON.stringify(body), body.createdAt)
       .run();
+    await trimOldRows(db);
     return json({ ok: true });
   } catch (err) {
     return json({ error: err.message }, 500);

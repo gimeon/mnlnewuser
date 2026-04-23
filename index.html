@@ -26,7 +26,7 @@
           <input type="file" id="fileInput" accept=".xlsx,.xls" hidden />
           <div class="dropzone-inner">
             <div class="dropzone-icon">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="38" height="38" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="42" height="42" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                 <polyline points="17 8 12 3 7 8" />
                 <line x1="12" y1="3" x2="12" y2="15" />
@@ -40,56 +40,119 @@
           </div>
         </div>
 
-        <div class="divider"><span>또는 관리자에서 자동 다운로드</span></div>
-
-        <button id="autoDownloadBtn" type="button" class="btn btn-primary btn-block" disabled>
-          관리자에서 자동 다운로드 & 분석 (준비중)
-        </button>
-        <div id="autoDownloadHint" class="field-hint"></div>
+        <div id="fileLoaded" class="file-loaded hidden">
+          <div class="file-icon-wrap">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="8" y1="13" x2="16" y2="13"/>
+              <line x1="8" y1="17" x2="16" y2="17"/>
+              <line x1="10" y1="9" x2="14" y2="9"/>
+            </svg>
+          </div>
+          <div class="file-meta">
+            <strong id="loadedFileName"></strong>
+            <span id="loadedFileMeta" class="field-hint"></span>
+          </div>
+          <button id="removeFileBtn" type="button" class="btn btn-ghost btn-sm">제거</button>
+        </div>
       </div>
 
       <div class="card">
-        <div class="field">
-          <label for="referenceTime">기준 시각 (집계 종료점)</label>
-          <div class="ref-time-row">
-            <div class="ref-time-input-wrap">
-              <input type="text" id="referenceTime" placeholder="yyyy-mm-dd hh:mm" autocomplete="off" />
-              <span id="currentTimeBadge" class="current-time-badge hidden">(현재 시각)</span>
+        <div class="period-config">
+          <div class="period-row">
+            <div class="period-row-inner">
+              <span class="period-row-label">집계 시작점:</span>
+              <strong id="startPointText">-</strong>
+              <span id="startPointHint" class="field-hint"></span>
+              <button id="startChangeBtn" type="button" class="period-change-btn">변경</button>
             </div>
-            <button id="resetNowBtn" type="button" class="btn btn-ghost">현재 시각</button>
+            <fieldset id="startPopover" class="period-popover hidden">
+              <legend>집계 시작점 변경</legend>
+              <label class="radio">
+                <input type="radio" name="startPoint" value="lastReport" />
+                <span>
+                  <strong>마지막 보고 시각부터</strong>
+                  <span id="lastReportDisplay" class="field-hint"></span>
+                </span>
+              </label>
+              <label class="radio">
+                <input type="radio" name="startPoint" value="endZero" />
+                <span>
+                  <strong>종료일 0시부터</strong>
+                  <span id="endZeroDisplay" class="field-hint"></span>
+                </span>
+              </label>
+              <label class="radio">
+                <input type="radio" name="startPoint" value="last24h" />
+                <span>
+                  <strong>종료점 24시간 전부터</strong>
+                  <span id="last24hDisplay" class="field-hint"></span>
+                </span>
+              </label>
+              <label class="radio radio-inline">
+                <input type="radio" name="startPoint" value="custom" />
+                <span>
+                  <strong>직접 설정</strong>
+                  <div class="custom-start-wrap">
+                    <input type="text" id="customStartTime" placeholder="yyyy-mm-dd hh:mm" autocomplete="off" />
+                  </div>
+                </span>
+              </label>
+            </fieldset>
+          </div>
+
+          <div class="period-row-divider"></div>
+
+          <div class="period-row">
+            <div class="period-row-inner">
+              <span class="period-row-label">집계 종료점:</span>
+              <strong id="endPointText">-</strong>
+              <span id="endPointHint" class="field-hint"></span>
+              <button id="endChangeBtn" type="button" class="period-change-btn">변경</button>
+            </div>
+            <fieldset id="endPopover" class="period-popover hidden">
+              <legend>집계 종료점 변경</legend>
+              <label class="radio">
+                <input type="radio" name="endPoint" value="fileModified" />
+                <span>
+                  <strong>파일 최종 수정일까지</strong>
+                  <span id="fileModifiedDisplay" class="field-hint"></span>
+                </span>
+              </label>
+              <label class="radio">
+                <input type="radio" name="endPoint" value="now" />
+                <span>
+                  <strong>현재 시각까지</strong>
+                  <span id="nowDisplay" class="field-hint"></span>
+                </span>
+              </label>
+              <label class="radio radio-inline">
+                <input type="radio" name="endPoint" value="custom" />
+                <span>
+                  <strong>직접 설정</strong>
+                  <div class="custom-end-wrap">
+                    <input type="text" id="customEndTime" placeholder="yyyy-mm-dd hh:mm" autocomplete="off" />
+                  </div>
+                </span>
+              </label>
+            </fieldset>
           </div>
         </div>
 
-        <fieldset class="duration">
-          <legend>집계 시작점</legend>
-          <label class="radio">
-            <input type="radio" name="duration" value="lastReport" />
-            <span>
-              <strong>마지막 보고 시각부터</strong>
-              <span id="lastReportDisplay" class="field-hint"></span>
-            </span>
-          </label>
-          <label class="radio">
-            <input type="radio" name="duration" value="todayMidnight" />
-            <span><strong>기준일 0시부터</strong></span>
-          </label>
-          <label class="radio">
-            <input type="radio" name="duration" value="last24h" />
-            <span><strong>기준 시각 24시간 전부터</strong></span>
-          </label>
-        </fieldset>
+        <div id="periodSummary" class="period-summary"></div>
       </div>
     </section>
 
     <section id="status" class="status hidden"></section>
 
-    <section id="resultSection" class="card result-section hidden">
+    <section id="resultSection" class="card result-section is-empty">
       <div class="result-header">
         <h2>일간 보고 문장</h2>
         <div class="result-actions">
-          <button id="copyBtn" class="btn btn-ghost" type="button">복사</button>
+          <button id="copyBtn" class="btn btn-ghost" type="button" disabled>복사</button>
           <div class="save-wrap">
-            <button id="saveRecordBtn" class="btn btn-primary" type="button">보고 기록으로 저장</button>
+            <button id="saveRecordBtn" class="btn btn-primary" type="button" disabled>보고 기록으로 저장</button>
             <div id="savePopover" class="popover hidden" role="dialog" aria-modal="false" aria-labelledby="popoverTitle">
               <h3 id="popoverTitle" class="popover-title">보고 기록으로 저장</h3>
               <label class="popover-label" for="popoverAuthorInput">작성자 이름</label>
@@ -103,7 +166,7 @@
           </div>
         </div>
       </div>
-      <pre id="resultText" class="result-text"></pre>
+      <pre id="resultText" class="result-text">엑셀 파일을 업로드하고 집계 기간을 설정하면 여기에 일간 보고 문장이 생성됩니다.</pre>
       <details class="debug">
         <summary>상세 집계 보기</summary>
         <div id="debugArea"></div>
@@ -112,8 +175,7 @@
 
     <section class="card history-section">
       <div class="history-header">
-        <h2>보고 기록</h2>
-        <button id="clearHistoryBtn" class="btn btn-ghost btn-sm" type="button">전체 삭제</button>
+        <h2>보고 기록 <span class="history-sub">최근 10개 항목만 저장됩니다.</span></h2>
       </div>
       <div id="historyList" class="history-list">
         <p class="empty">아직 저장된 기록이 없습니다.</p>
