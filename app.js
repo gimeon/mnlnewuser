@@ -149,6 +149,30 @@ async function saveHistoryEntry(entry) {
   } catch {}
 }
 
+async function deleteHistoryEntry(entry) {
+  // D1: id로 삭제
+  if (entry && entry.id !== undefined) {
+    try {
+      const res = await fetch(`/api/reports/${entry.id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await loadHistory();
+      return;
+    } catch (err) {
+      console.warn('[history] API 개별 삭제 실패, localStorage 폴백:', err.message);
+    }
+  }
+  // localStorage 폴백: savedAt + createdAt 조합으로 찾아 삭제
+  try {
+    const list = loadHistoryLocal();
+    const i = list.findIndex((e) => e.savedAt === entry.savedAt && e.createdAt === entry.createdAt && e.author === entry.author);
+    if (i >= 0) {
+      list.splice(i, 1);
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(list));
+      _historyCache = list;
+    }
+  } catch {}
+}
+
 async function clearAllHistory() {
   try {
     const res = await fetch('/api/reports', { method: 'DELETE' });
@@ -244,7 +268,6 @@ const customStartPicker = flatpickr(CUSTOM_START_INPUT, {
     updateStartPointSummary();
     updatePeriodSummary();
     if (currentRows) renderReport();
-    if (getSelectedStartOption() === 'custom') closeAllPeriodPopovers();
   },
 });
 const customEndPicker = flatpickr(CUSTOM_END_INPUT, {
@@ -256,9 +279,48 @@ const customEndPicker = flatpickr(CUSTOM_END_INPUT, {
     updateStartPointHints();
     updatePeriodSummary();
     if (currentRows) renderReport();
-    if (getSelectedEndOption() === 'custom') closeAllPeriodPopovers();
   },
 });
+
+// 캘린더 하단에 빠른 시각 프리셋 버튼 주입
+function injectTimePresets(picker, presets) {
+  const inject = (dates, str, fp) => {
+    if (fp.calendarContainer.querySelector('.fp-time-presets')) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'fp-time-presets';
+    presets.forEach((p) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'fp-preset-btn';
+      btn.textContent = p.label;
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const cur = fp.selectedDates[0] ? new Date(fp.selectedDates[0]) : new Date();
+        if (p.apply) p.apply(cur);
+        else cur.setHours(p.h, p.m, 0, 0);
+        fp.setDate(cur, true);
+      });
+      wrap.appendChild(btn);
+    });
+    fp.calendarContainer.appendChild(wrap);
+  };
+  picker.config.onReady.push(inject);
+  inject(picker.selectedDates, '', picker);
+}
+
+injectTimePresets(customStartPicker, [
+  { label: '08:00', h: 8,  m: 0 },
+  { label: '12:00', h: 12, m: 0 },
+  { label: '16:00', h: 16, m: 0 },
+  { label: '20:00', h: 20, m: 0 },
+]);
+injectTimePresets(customEndPicker, [
+  { label: '현재 시각', apply: (d) => { const n = new Date(); d.setHours(n.getHours(), n.getMinutes(), 0, 0); } },
+  { label: '08:00', h: 8,  m: 0 },
+  { label: '12:00', h: 12, m: 0 },
+  { label: '16:00', h: 16, m: 0 },
+  { label: '20:00', h: 20, m: 0 },
+]);
 
 // ---- 요약 라인 업데이트 ----
 function updateStartPointSummary() {
@@ -382,7 +444,9 @@ function attachPeriodOutside() {
   periodOutsideHandler = (e) => {
     const inside = START_POPOVER.contains(e.target) || END_POPOVER.contains(e.target)
                 || START_CHANGE_BTN.contains(e.target) || END_CHANGE_BTN.contains(e.target);
-    if (inside) return;
+    // flatpickr 캘린더는 body에 바로 붙어 렌더링되므로 "바깥"으로 인식되지 않도록 예외 처리
+    const inFlatpickr = e.target && e.target.closest && e.target.closest('.flatpickr-calendar');
+    if (inside || inFlatpickr) return;
     closeAllPeriodPopovers();
   };
   setTimeout(() => {
@@ -751,7 +815,8 @@ function buildReport(rows, startDate, endDate) {
     const newCount = members.length;
     const before = after - newCount;
     const repFull = [rep.department, rep.name, rep.title].filter(Boolean).join(' ');
-    const countClause = newCount > 1 ? `등 ${newCount}명` : `${newCount}명`;
+    // 대표자 정보(부서/이름/직책)가 전혀 없으면 "등"을 붙이지 않고 인원수만 표기
+    const countClause = (newCount > 1 && repFull) ? `등 ${newCount}명` : `${newCount}명`;
     const body = [org, repFull, countClause].filter(Boolean).join(' ');
     entries.push({
       line: `- ${body}(${before}명 -> ${after}명)`,
@@ -832,13 +897,39 @@ function renderDebugTable(entries) {
 // 복사 / 기록 저장 / 기록 렌더
 // ============================================================================
 
-COPY_BTN.addEventListener('click', async () => {
+async function copyPlainText(text) {
+  // 1) ClipboardItem에 text/plain만 담아 기록 — text/html 레이어가 남지 않도록 명시적으로 plain only
   try {
-    await navigator.clipboard.writeText(RESULT_TEXT.textContent);
+    if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
+      const item = new ClipboardItem({ 'text/plain': new Blob([text], { type: 'text/plain' }) });
+      await navigator.clipboard.write([item]);
+      return true;
+    }
+  } catch {}
+  // 2) writeText (plain text 지정)
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {}
+  // 3) 구형 브라우저 폴백 — 임시 textarea + execCommand
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); return true; }
+  catch { return false; }
+  finally { ta.remove(); }
+}
+
+COPY_BTN.addEventListener('click', async () => {
+  const ok = await copyPlainText(RESULT_TEXT.textContent);
+  if (ok) {
     COPY_BTN.textContent = '복사됨 ✓';
     COPY_BTN.classList.add('copied');
     setTimeout(() => { COPY_BTN.textContent = '복사'; COPY_BTN.classList.remove('copied'); }, 1500);
-  } catch {
+  } else {
     setStatus('클립보드 복사에 실패했습니다. 수동으로 드래그하여 복사하세요.', 'error');
   }
 });
@@ -860,6 +951,8 @@ function openSavePopover() {
   // 바깥 클릭 / Esc 닫기
   popoverOutsideHandler = (e) => {
     if (SAVE_POPOVER.contains(e.target) || SAVE_RECORD_BTN.contains(e.target)) return;
+    const inFlatpickr = e.target && e.target.closest && e.target.closest('.flatpickr-calendar');
+    if (inFlatpickr) return;
     closeSavePopover();
   };
   document.addEventListener('mousedown', popoverOutsideHandler);
@@ -940,30 +1033,54 @@ function renderHistoryList() {
     const winEnd = formatLocalFull(new Date(e.endAt));
     const duration = formatDuration(new Date(e.startAt).getTime(), new Date(e.endAt).getTime());
     const savedTs = e.savedAt ? formatLocalFull(new Date(e.savedAt)) : '';
-    const savedFooter = savedTs ? `<div class="history-footer">이 보고는 ${escapeHtml(savedTs)}에 저장되었습니다.</div>` : '';
     const winEndHtml = escapeHtml(winEnd);
     const latestBadge = idx === 0 ? '<span class="latest-badge">마지막</span>' : '';
+    const periodLeft = `${escapeHtml(winStart)} ~ ${winEndHtml} (${escapeHtml(duration)})`;
+    const savedRight = savedTs ? `이 보고는 ${escapeHtml(savedTs)}에 저장되었습니다.` : '';
     return `
       <div class="history-item${idx === 0 ? ' is-latest' : ''}">
+        <button class="history-delete-btn" data-idx="${idx}" type="button" aria-label="이 보고 기록 삭제">× 삭제</button>
         <div class="history-meta">
-          ${latestBadge}<strong>${escapeHtml(e.author)}</strong> 집계 기간: ${escapeHtml(winStart)} ~ ${winEndHtml} (${escapeHtml(duration)}), ${e.newCount}명 / ${e.orgCount}개 기관
+          ${latestBadge}<strong>${escapeHtml(e.author)}</strong> ${e.newCount}명 / ${e.orgCount}개 기관, ${winEndHtml} 기준
         </div>
         <details class="history-toggle">
           <summary></summary>
           <pre class="history-text">${escapeHtml(e.reportText)}</pre>
         </details>
-        ${savedFooter}
+        <div class="history-footer">
+          <span class="history-footer-left">${periodLeft}</span>
+          <span class="history-footer-right">${savedRight}</span>
+        </div>
       </div>`;
   }).join('');
 
   let moreBtn = '';
   if (list.length > 2) {
-    const label = historyShowAll ? '접기' : `전체 보기 (${list.length - 2}개 더)`;
+    const label = historyShowAll ? '접기' : `전체 보기 (총 ${list.length}건)`;
     moreBtn = `<button id="historyShowAllBtn" class="history-show-all-btn" type="button">${label}</button>`;
   }
   HISTORY_LIST.innerHTML = itemsHtml + moreBtn;
   const btn = $('historyShowAllBtn');
   if (btn) btn.addEventListener('click', () => { historyShowAll = !historyShowAll; renderHistoryList(); });
+  // 개별 삭제 버튼 클릭 위임
+  HISTORY_LIST.querySelectorAll('.history-delete-btn').forEach((el) => {
+    el.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const idx = Number(el.dataset.idx);
+      const entry = visible[idx];
+      if (!entry) return;
+      const label = `${entry.author || ''}${entry.createdAt ? ' · 기준 ' + formatLocalFull(new Date(entry.createdAt)) : ''}`;
+      if (!confirm(`이 보고 기록을 삭제할까요?\n${label}`)) return;
+      el.disabled = true;
+      try {
+        await deleteHistoryEntry(entry);
+        renderHistoryList();
+        refreshPeriodUI();
+      } finally {
+        el.disabled = false;
+      }
+    });
+  });
   return;
 }
 

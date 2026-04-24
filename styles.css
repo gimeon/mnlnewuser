@@ -101,7 +101,7 @@ header h1 { font-size: 26px; margin: 0 0 8px; font-weight: 700; }
 }
 .period-row-label { color: #5a6271; font-weight: 500; font-size: 13px; margin-right: 4px; }
 .period-row-inner strong { color: #1b1f24; }
-.period-row-inner .field-hint { font-size: 13px; }
+.period-row-inner .field-hint { font-size: 14px; }
 .period-row-divider { border-top: 1px dashed #e4e8ef; margin: 0 14px; }
 .period-change-btn {
   margin-left: auto;
@@ -530,6 +530,26 @@ header h1 { font-size: 26px; margin: 0 0 8px; font-weight: 700; }
   padding: 12px 14px;
   background: #fafbfc;
 }
+.history-delete-btn {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  padding: 3px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: #8a94a4;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 6px;
+  font-family: inherit;
+  line-height: 1;
+}
+.history-delete-btn:hover {
+  background: #fdecec;
+  border-color: #f7c6c6;
+  color: #b32020;
+}
+.history-delete-btn:disabled { cursor: wait; opacity: 0.6; }
 .latest-badge {
   display: inline-block;
   padding: 2px 8px;
@@ -584,10 +604,41 @@ header h1 { font-size: 26px; margin: 0 0 8px; font-weight: 700; }
   border-top: 1px dashed #e4e8ef;
   font-size: 13px;
   color: #8a94a4;
-  text-align: right;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
 }
+.history-footer-left { text-align: left; }
+.history-footer-right { text-align: right; color: #8a94a4; }
 
 .hidden { display: none !important; }
+
+/* 페이지 하단 푸터 */
+.page-footer {
+  margin-top: 48px;
+  padding: 22px 0 10px;
+  text-align: center;
+  border-top: 1px solid #e4e8ef;
+  color: #8a94a4;
+  font-size: 12px;
+  line-height: 1.9;
+}
+.page-footer .footer-row { display: block; }
+.page-footer .footer-app { color: #5a6271; font-weight: 500; font-size: 13px; }
+.page-footer .footer-version {
+  margin-left: 6px;
+  padding: 1px 7px;
+  font-size: 11px;
+  color: #5a6271;
+  background: #eef0f4;
+  border-radius: 10px;
+  letter-spacing: 0.02em;
+}
+.page-footer .footer-sub { color: #8a94a4; }
+.page-footer a { color: #6366f1; text-decoration: none; }
+.page-footer a:hover { text-decoration: underline; }
 
 /* busy state: UI 잠금 */
 body.is-busy .dropzone,
