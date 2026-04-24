@@ -214,7 +214,7 @@ let currentFileMeta = null; // { name, lastModified }
 const START_LABELS = {
   lastReport: '마지막 보고 시각부터',
   endZero:    '종료일 0시부터',
-  last24h:    '종료점 24시간 전부터',
+  last24h:    '종료 시각 24시간 전부터',
   custom:     '직접 설정',
 };
 const END_LABELS = {
@@ -310,13 +310,21 @@ function injectTimePresets(picker, presets) {
 }
 
 injectTimePresets(customStartPicker, [
+  { label: '00:00', h: 0,  m: 0 },
+  { label: '04:00', h: 4,  m: 0 },
   { label: '08:00', h: 8,  m: 0 },
   { label: '12:00', h: 12, m: 0 },
   { label: '16:00', h: 16, m: 0 },
   { label: '20:00', h: 20, m: 0 },
 ]);
 injectTimePresets(customEndPicker, [
-  { label: '현재 시각', apply: (d) => { const n = new Date(); d.setHours(n.getHours(), n.getMinutes(), 0, 0); } },
+  { label: '현재 시각', apply: (d) => {
+      const n = new Date();
+      d.setFullYear(n.getFullYear(), n.getMonth(), n.getDate());
+      d.setHours(n.getHours(), n.getMinutes(), 0, 0);
+    } },
+  { label: '00:00', h: 0,  m: 0 },
+  { label: '04:00', h: 4,  m: 0 },
   { label: '08:00', h: 8,  m: 0 },
   { label: '12:00', h: 12, m: 0 },
   { label: '16:00', h: 16, m: 0 },
@@ -395,7 +403,7 @@ function updatePeriodSummary() {
   const startDate = getStartPoint(endDate);
   PERIOD_SUMMARY.classList.remove('error');
   if (!endDate) {
-    PERIOD_SUMMARY.innerHTML = '<em>왼쪽의 업로드 영역에 엑셀 파일을 올려주세요</em>';
+    PERIOD_SUMMARY.innerHTML = '<em>엑셀 파일을 업로드해 주세요</em>';
     return;
   }
   if (!startDate) {
@@ -403,6 +411,11 @@ function updatePeriodSummary() {
     return;
   }
   if (startDate.getTime() >= endDate.getTime()) {
+    // '마지막 보고 시각부터' 옵션에서 start==end 는 '방금 저장 직후' 정상 상태 — 에러 아닌 안내로
+    if (getSelectedStartOption() === 'lastReport') {
+      PERIOD_SUMMARY.innerHTML = '<em>직전 보고 이후 아직 새 구간이 없습니다. 종료점을 조정하거나 새 데이터가 쌓이면 재집계됩니다.</em>';
+      return;
+    }
     PERIOD_SUMMARY.textContent = '시작 시각이 종료 시각보다 늦거나 같습니다.';
     PERIOD_SUMMARY.classList.add('error');
     return;
@@ -809,7 +822,7 @@ async function parseAndRender(buffer) {
     setStatusWithProgress('분석 완료', 100);
     currentRows = result.rows;
     await yieldToUI();
-    renderReport();
+    renderReport({ focusCopy: true });
   } catch (err) {
     console.error('[parse] failed:', err);
     setStatus(`파싱 실패: ${err.message}`, 'error');
@@ -1007,7 +1020,7 @@ function buildReport(rows, startDate, endDate) {
   };
 }
 
-function renderReport() {
+function renderReport(opts = {}) {
   if (!currentRows) return;
   const endDate = getEndPoint();
   if (!endDate) { setStatus('집계 종료점을 설정해 주세요.', 'error'); return; }
@@ -1025,6 +1038,8 @@ function renderReport() {
   SAVE_RECORD_BTN.disabled = false;
   COPY_BTN.disabled = false;
   renderDebugTable(report.entries);
+  // 파일 로드 흐름에서 호출된 경우에만 복사 버튼으로 포커스
+  if (opts.focusCopy) setTimeout(() => COPY_BTN.focus(), 0);
 
   const windowLabel = `${formatLocalFull(startDate)} ~ ${formatLocalFull(endDate)}`;
   const duration = formatDuration(startDate.getTime(), endDate.getTime());
@@ -1049,7 +1064,7 @@ function renderDebugTable(entries) {
         <tr>
           ${orgCell}
           <td>${escapeHtml(m.department || '')}</td>
-          <td>${escapeHtml(m.name || '')}${isRep ? ' <span class="rep-badge">대표</span>' : ''}</td>
+          <td>${m.name ? escapeHtml(m.name) : '<span class="no-name">(이름없음)</span>'}${isRep ? ' ✔️' : ''}</td>
           <td>${escapeHtml(m.title || '')}</td>
           <td class="mono-cell">${escapeHtml(m.phoneTail || '')}</td>
           <td class="mono-cell">${escapeHtml(tsLabel)}</td>
@@ -1099,6 +1114,8 @@ COPY_BTN.addEventListener('click', async () => {
     COPY_BTN.textContent = '복사됨 ✓';
     COPY_BTN.classList.add('copied');
     setTimeout(() => { COPY_BTN.textContent = '복사'; COPY_BTN.classList.remove('copied'); }, 1500);
+    // 복사 성공 후 '보고 기록으로 저장' 버튼으로 포커스 이동 → 다음 자연스러운 액션 유도
+    setTimeout(() => SAVE_RECORD_BTN.focus(), 0);
   } else {
     setStatus('클립보드 복사에 실패했습니다. 수동으로 드래그하여 복사하세요.', 'error');
   }
@@ -1167,6 +1184,7 @@ async function confirmSavePopover() {
   POPOVER_CONFIRM.textContent = '저장 중…';
   try {
     await saveHistoryEntry(entry);
+    _justAddedEntry = true;
     renderHistoryList();
     refreshPeriodUI();
     closeSavePopover();
@@ -1190,6 +1208,7 @@ POPOVER_AUTHOR.addEventListener('keydown', (e) => {
 
 
 let historyShowAll = false;
+let _justAddedEntry = false; // 저장 직후 첫 항목에 진입 애니메이션 부여용 플래그
 
 function renderHistoryList() {
   const list = _historyCache;
@@ -1197,7 +1216,7 @@ function renderHistoryList() {
     HISTORY_LIST.innerHTML = '<p class="empty">아직 저장된 기록이 없습니다.</p>';
     return;
   }
-  const visible = historyShowAll ? list : list.slice(0, 2);
+  const visible = historyShowAll ? list : list.slice(0, 3);
   const itemsHtml = visible.map((e, idx) => {
     const winStart = formatLocalFull(new Date(e.startAt));
     const winEnd = formatLocalFull(new Date(e.endAt));
@@ -1206,9 +1225,11 @@ function renderHistoryList() {
     const winEndHtml = escapeHtml(winEnd);
     const latestBadge = idx === 0 ? '<span class="latest-badge">마지막</span>' : '';
     const periodLeft = `${escapeHtml(winStart)} ~ ${winEndHtml} (${escapeHtml(duration)})`;
-    const savedRight = savedTs ? `이 보고는 ${escapeHtml(savedTs)}에 저장되었습니다.` : '';
+    const savedRight = savedTs ? `이 보고는 ${escapeHtml(savedTs)}에 저장됨` : '';
+    const entering = (_justAddedEntry && idx === 0) ? ' is-entering' : '';
+    const peeking = (!historyShowAll && list.length > 3 && idx === 2) ? ' is-peeking' : '';
     return `
-      <div class="history-item${idx === 0 ? ' is-latest' : ''}">
+      <div class="history-item${idx === 0 ? ' is-latest' : ''}${entering}${peeking}">
         <button class="history-delete-btn" data-idx="${idx}" type="button" aria-label="이 보고 기록 삭제">× 삭제</button>
         <div class="history-meta">
           ${latestBadge}<strong>${escapeHtml(e.author)}</strong> ${e.newCount}명 / ${e.orgCount}개 기관, ${winEndHtml} 기준
@@ -1225,11 +1246,12 @@ function renderHistoryList() {
   }).join('');
 
   let moreBtn = '';
-  if (list.length > 2) {
+  if (list.length > 3) {
     const label = historyShowAll ? '접기' : `전체 보기 (총 ${list.length}건)`;
     moreBtn = `<button id="historyShowAllBtn" class="history-show-all-btn" type="button">${label}</button>`;
   }
   HISTORY_LIST.innerHTML = itemsHtml + moreBtn;
+  _justAddedEntry = false; // 플래그 소비 — 다음 렌더에선 애니메이션 재실행 안 함
   const btn = $('historyShowAllBtn');
   if (btn) btn.addEventListener('click', () => { historyShowAll = !historyShowAll; renderHistoryList(); });
   // 개별 삭제 버튼 클릭 위임
@@ -1242,7 +1264,10 @@ function renderHistoryList() {
       const label = `${entry.author || ''}${entry.createdAt ? ' · 기준 ' + formatLocalFull(new Date(entry.createdAt)) : ''}`;
       if (!confirm(`이 보고 기록을 삭제할까요?\n${label}`)) return;
       el.disabled = true;
+      const itemEl = el.closest('.history-item');
+      if (itemEl) itemEl.classList.add('is-leaving');
       try {
+        await new Promise((r) => setTimeout(r, 280)); // 나가는 애니메이션 기다림
         await deleteHistoryEntry(entry);
         renderHistoryList();
         refreshPeriodUI();

@@ -34,7 +34,7 @@ header h1 { font-size: 26px; margin: 0 0 8px; font-weight: 700; }
   margin-bottom: 16px;
   align-items: stretch;
 }
-.two-col .card { margin-bottom: 0; display: flex; flex-direction: column; }
+.two-col .card { margin-bottom: 0; display: flex; flex-direction: column; min-height: 280px; }
 .two-col .card > .dropzone { flex: 1; display: flex; align-items: center; justify-content: center; }
 .two-col .card > .file-loaded { flex: 1; align-self: stretch; }
 @media (max-width: 780px) {
@@ -165,7 +165,7 @@ header h1 { font-size: 26px; margin: 0 0 8px; font-weight: 700; }
 }
 
 .period-summary {
-  margin-top: 14px;
+  margin-top: auto;
   padding: 10px 12px;
   font-size: 13px;
   color: #5a6271;
@@ -260,6 +260,10 @@ header h1 { font-size: 26px; margin: 0 0 8px; font-weight: 700; }
   border: 1px solid transparent;
   transition: background 120ms, border-color 120ms, color 120ms, box-shadow 120ms;
 }
+.btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.35);
+}
 .btn-primary {
   background: #6366f1;
   color: #fff;
@@ -317,16 +321,18 @@ header h1 { font-size: 26px; margin: 0 0 8px; font-weight: 700; }
 .dropzone {
   border: 2px dashed #c2cad6;
   border-radius: 12px;
-  padding: 38px 20px;
+  padding: 20px;
   text-align: center;
   cursor: pointer;
+  min-height: 0;
 }
 .dropzone:hover, .dropzone:focus, .dropzone.is-dragging {
   border-color: #6366f1;
   background: #f1f3ff;
   outline: none;
 }
-.dropzone-icon { margin-bottom: 8px; color: #8a94a4; display: flex; justify-content: center; }
+.dropzone-icon { margin-bottom: 6px; color: #8a94a4; display: flex; justify-content: center; }
+.dropzone-icon svg { width: 34px; height: 34px; }
 .dropzone:hover .dropzone-icon, .dropzone.is-dragging .dropzone-icon { color: #6366f1; }
 
 /* 파일 업로드 완료 상태 */
@@ -547,6 +553,7 @@ header h1 { font-size: 26px; margin: 0 0 8px; font-weight: 700; }
   font-family: "SFMono-Regular", Consolas, monospace;
   color: #5a6271;
 }
+.debug-table .no-name { color: #a8b0bd; font-style: italic; }
 
 /* history */
 .history-section .history-header {
@@ -561,23 +568,50 @@ header h1 { font-size: 26px; margin: 0 0 8px; font-weight: 700; }
 .history-list .empty { color: #8a94a4; font-size: 13px; margin: 4px 0; }
 .history-show-all-btn {
   align-self: center;
-  margin-top: 4px;
-  padding: 6px 16px;
+  margin-top: -22px;
+  position: relative;
+  z-index: 2;
+  padding: 7px 18px;
   background: #fff;
   border: 1px solid #d0d5de;
   color: #5a6271;
-  border-radius: 16px;
+  border-radius: 18px;
   font-size: 12px;
   cursor: pointer;
   font-family: inherit;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
 }
 .history-show-all-btn:hover { border-color: #6366f1; color: #6366f1; }
+
+/* 세 번째 항목이 "엿보기" 상태: 아래 50px 구간에서만 자연스럽게 페이드 아웃 */
+.history-item.is-peeking {
+  max-height: 110px;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 50px), transparent 100%);
+          mask-image: linear-gradient(to bottom, #000 calc(100% - 50px), transparent 100%);
+}
 .history-item {
   position: relative;
   border: 1px solid #eef0f4;
   border-radius: 10px;
   padding: 12px 14px;
   background: #fafbfc;
+}
+@keyframes history-item-enter {
+  from { opacity: 0; transform: translateY(-10px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.history-item.is-entering {
+  animation: history-item-enter 0.35s ease-out;
+}
+@keyframes history-item-leave {
+  from { opacity: 1; max-height: 600px; padding-top: 12px; padding-bottom: 12px; margin-bottom: 10px; transform: translateX(0); }
+  to   { opacity: 0; max-height: 0;     padding-top: 0;    padding-bottom: 0;    margin-bottom: 0;    transform: translateX(20px); border-width: 0; }
+}
+.history-item.is-leaving {
+  overflow: hidden;
+  pointer-events: none;
+  animation: history-item-leave 0.28s ease-in forwards;
 }
 .history-delete-btn {
   position: absolute;
