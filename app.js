@@ -15,6 +15,7 @@ const COLUMN_MAP = {
 const REPORT_HEADER_LABEL = '모바일 뉴스리더 제공';
 const HISTORY_KEY = 'dailyReportHistory_v1';
 const LAST_AUTHOR_KEY = 'dailyReportLastAuthor_v1';
+const PARSE_TIME_KEY = 'dailyReportParseTimeMs_v1';
 const HISTORY_MAX_ITEMS = 10;
 const MAX_FILE_SIZE_MB = 15;
 
@@ -567,6 +568,18 @@ function setStatus(message, variant = 'info') {
   STATUS_EL.classList.remove('hidden');
 }
 
+function setStatusWithProgress(message, pct) {
+  // pct === undefined → indeterminate 애니메이션
+  // pct (0~100)       → 추정 진행률 막대
+  const barHtml = (pct === undefined)
+    ? '<span class="status-progress indeterminate"></span>'
+    : `<span class="status-progress"><span class="status-progress-fill" style="width:${Math.max(0, Math.min(100, pct))}%"></span></span>`;
+  STATUS_EL.innerHTML = `<span class="status-msg"></span>${barHtml}`;
+  STATUS_EL.querySelector('.status-msg').textContent = message;
+  STATUS_EL.className = 'status is-info has-progress';
+  STATUS_EL.classList.remove('hidden');
+}
+
 
 // ============================================================================
 // 파일 업로드 (드롭존/파일 선택)
@@ -581,19 +594,25 @@ FILE_INPUT.addEventListener('change', (e) => {
   if (isBusy) return;
   if (e.target.files && e.target.files[0]) handleFile(e.target.files[0]);
 });
-['dragenter', 'dragover'].forEach((evt) => {
-  DROPZONE.addEventListener(evt, (e) => {
-    e.preventDefault(); e.stopPropagation();
-    if (!isBusy) DROPZONE.classList.add('is-dragging');
+// 드롭존과 '파일 로드됨' 영역 모두에서 드래그/드롭 허용 (파일 교체 포함)
+[DROPZONE, FILE_LOADED].forEach((target) => {
+  ['dragenter', 'dragover'].forEach((evt) => {
+    target.addEventListener(evt, (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (!isBusy) target.classList.add('is-dragging');
+    });
   });
-});
-['dragleave', 'drop'].forEach((evt) => {
-  DROPZONE.addEventListener(evt, (e) => { e.preventDefault(); e.stopPropagation(); DROPZONE.classList.remove('is-dragging'); });
-});
-DROPZONE.addEventListener('drop', (e) => {
-  if (isBusy) return;
-  const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
-  if (file) handleFile(file);
+  ['dragleave', 'drop'].forEach((evt) => {
+    target.addEventListener(evt, (e) => {
+      e.preventDefault(); e.stopPropagation();
+      target.classList.remove('is-dragging');
+    });
+  });
+  target.addEventListener('drop', (e) => {
+    if (isBusy) return;
+    const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (file) handleFile(file);
+  });
 });
 
 // 클립보드 붙여넣기 지원 (Finder에서 파일 복사 → Cmd+V)
@@ -617,6 +636,14 @@ async function handleFile(file) {
     setStatus(`파일이 너무 큽니다 (${sizeMB.toFixed(1)}MB). 최대 ${MAX_FILE_SIZE_MB}MB까지 처리할 수 있어요.`, 'error');
     return;
   }
+  // 기존 파일이 이미 올라가 있다면 교체 확인 (보고 문장 영향 안내)
+  if (currentFileMeta) {
+    let msg = `기존 파일(${currentFileMeta.name})을 새 파일(${file.name})로 교체할까요?`;
+    if (currentReport) {
+      msg += `\n\n현재 생성된 일간 보고 문장은 초기화되고, 새 파일을 기준으로 다시 생성됩니다.`;
+    }
+    if (!confirm(msg)) return;
+  }
   setBusy(true);
   try {
     const sizeMBstr = sizeMB.toFixed(1);
@@ -639,14 +666,156 @@ async function handleFile(file) {
   }
 }
 
+// ============================================================================
+// Web Worker 기반 엑셀 파싱 — XLSX.read가 매우 무거워 UI 스레드를 막으므로 분리
+// ============================================================================
+
+const PARSE_WORKER_SCRIPT = `
+importScripts('https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js');
+
+function extractPhoneTail(v) {
+  if (!v) return '';
+  const digits = String(v).replace(/\\D/g, '');
+  return digits.length >= 4 ? digits.slice(-4) : digits;
+}
+
+function parseDateTime(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (value instanceof Date && !isNaN(value)) return value;
+  if (typeof value === 'number') {
+    const ms = Math.round((value - 25569) * 86400 * 1000);
+    const d = new Date(ms);
+    if (!isNaN(d)) return d;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    const m = trimmed.match(/^(\\d{4})[-/.](\\d{1,2})[-/.](\\d{1,2})(?:[ T](\\d{1,2}):(\\d{1,2})(?::(\\d{1,2}))?)?$/);
+    if (m) {
+      const [, y, mo, d, hh, mm, ss] = m;
+      return new Date(Number(y), Number(mo) - 1, Number(d), Number(hh || 0), Number(mm || 0), Number(ss || 0));
+    }
+    const parsed = new Date(trimmed);
+    if (!isNaN(parsed)) return parsed;
+  }
+  return null;
+}
+
+self.onmessage = function (e) {
+  const { buffer, colMap } = e.data;
+  try {
+    const t0 = performance.now();
+    const workbook = XLSX.read(buffer, {
+      type: 'array', dense: true,
+      cellDates: false, cellNF: false, cellText: false, cellFormula: false, cellStyles: false,
+      sheetStubs: false, bookDeps: false, bookFiles: false, bookProps: false, bookSheets: false,
+    });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const tRead = performance.now();
+    const data = sheet['!data'];
+    if (!data || data.length < 2) { self.postMessage({ error: 'empty' }); return; }
+
+    const headerRow = data[0] || [];
+    const headers = headerRow.map((c) => (c && c.v != null) ? String(c.v) : '');
+    const colIdx = {};
+    for (const field in colMap) {
+      const candidates = colMap[field];
+      for (let j = 0; j < candidates.length; j++) {
+        const i = headers.indexOf(candidates[j]);
+        if (i >= 0) { colIdx[field] = i; break; }
+      }
+    }
+    const iOrg = colIdx.organization, iDept = colIdx.department, iName = colIdx.name;
+    const iTitle = colIdx.title, iPhone = colIdx.phone, iReg = colIdx.registrationTime;
+
+    const total = data.length - 1;
+    const normalized = new Array(total);
+    let nIdx = 0;
+    for (let r = 1; r <= total; r++) {
+      const row = data[r];
+      if (!row) continue;
+      const orgCell = row[iOrg], regCell = row[iReg], deptCell = row[iDept];
+      const nameCell = row[iName], titleCell = row[iTitle], phoneCell = row[iPhone];
+      normalized[nIdx++] = {
+        organization: (orgCell && orgCell.v) || null,
+        department:   (deptCell && deptCell.v) || null,
+        name:         (nameCell && nameCell.v) || null,
+        title:        (titleCell && titleCell.v) || null,
+        phoneTail:    extractPhoneTail(phoneCell && phoneCell.v),
+        registeredAt: parseDateTime(regCell && regCell.v),
+      };
+    }
+    normalized.length = nIdx;
+    const tDone = performance.now();
+    self.postMessage({ ok: true, rows: normalized, tRead: Math.round(tRead - t0), tNorm: Math.round(tDone - tRead) });
+  } catch (err) {
+    self.postMessage({ error: err.message || String(err) });
+  }
+};
+`;
+
+let _parseWorker = null;
+function getParseWorker() {
+  if (_parseWorker) return _parseWorker;
+  try {
+    const blob = new Blob([PARSE_WORKER_SCRIPT], { type: 'application/javascript' });
+    _parseWorker = new Worker(URL.createObjectURL(blob));
+    return _parseWorker;
+  } catch (err) {
+    console.warn('[parse] Worker unavailable:', err);
+    return null;
+  }
+}
+
+function parseInWorker(buffer, colMap) {
+  return new Promise((resolve, reject) => {
+    const worker = getParseWorker();
+    if (!worker) return reject(new Error('Worker not available'));
+    const onMsg = (e) => { cleanup(); e.data.error ? reject(new Error(e.data.error)) : resolve(e.data); };
+    const onErr = (err) => { cleanup(); reject(err); };
+    const cleanup = () => { worker.removeEventListener('message', onMsg); worker.removeEventListener('error', onErr); };
+    worker.addEventListener('message', onMsg);
+    worker.addEventListener('error', onErr);
+    worker.postMessage({ buffer, colMap }, [buffer]); // buffer 이전(transferable)
+  });
+}
+
 async function parseAndRender(buffer) {
-  const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(sheet, { defval: null, raw: false });
-  if (!rows.length) { setStatus('엑셀에 데이터가 없습니다.', 'error'); return; }
-  currentRows = rows;
-  await yieldToUI();
-  renderReport();
+  const t0 = performance.now();
+  const startTick = Date.now();
+  // 이전 실행의 실제 소요 시간을 저장해두고, 그걸 기준으로 추정 %
+  const estimatedMs = Number(localStorage.getItem(PARSE_TIME_KEY)) || null;
+
+  const tick = () => {
+    const elapsed = Date.now() - startTick;
+    const sec = Math.floor(elapsed / 1000);
+    if (estimatedMs) {
+      const pct = Math.min(95, Math.floor((elapsed / estimatedMs) * 100));
+      setStatusWithProgress(`② 엑셀 분석 중… (${sec}초 경과)`, pct);
+    } else {
+      setStatusWithProgress(`② 엑셀 분석 중… (${sec}초 경과, 화면은 그대로 사용 가능합니다)`);
+    }
+  };
+  tick();
+  const progressTimer = setInterval(tick, 100);
+
+  try {
+    const result = await parseInWorker(buffer, COLUMN_MAP);
+    const t1 = performance.now();
+    const elapsedMs = t1 - t0;
+    console.log(`[perf] worker XLSX.read: ${result.tRead}ms, normalize: ${result.tNorm}ms, total: ${elapsedMs.toFixed(0)}ms (${result.rows.length} rows)`);
+    // 이번 실제 소요 시간을 다음 실행용 추정치로 저장
+    try { localStorage.setItem(PARSE_TIME_KEY, String(Math.round(elapsedMs))); } catch {}
+    if (!result.rows.length) { setStatus('엑셀에 데이터가 없습니다.', 'error'); return; }
+    setStatusWithProgress('분석 완료', 100);
+    currentRows = result.rows;
+    await yieldToUI();
+    renderReport();
+  } catch (err) {
+    console.error('[parse] failed:', err);
+    setStatus(`파싱 실패: ${err.message}`, 'error');
+  } finally {
+    clearInterval(progressTimer);
+  }
 }
 
 // ============================================================================
@@ -791,7 +960,8 @@ function groupBy(rows, key) {
 // ============================================================================
 
 function buildReport(rows, startDate, endDate) {
-  const normalized = rows.map(normalizeRow);
+  // rows는 이미 parseAndRender에서 정규화됨 — 여기서 다시 매핑하지 않는다
+  const normalized = rows;
   const startMs = startDate.getTime();
   const endMs = endDate.getTime();
 

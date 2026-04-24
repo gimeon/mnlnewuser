@@ -114,13 +114,19 @@ header h1 { font-size: 26px; margin: 0 0 8px; font-weight: 700; }
   cursor: pointer;
   font-family: inherit;
 }
-.period-change-btn:hover { border-color: #6366f1; background: #f5f6ff; }
+.period-change-btn:hover:not(:disabled) { border-color: #6366f1; background: #f5f6ff; }
 .period-change-btn.is-open {
   background: #6366f1;
   color: #fff;
   border-color: #6366f1;
 }
-.period-change-btn.is-open:hover { background: #4f52e6; border-color: #4f52e6; }
+.period-change-btn.is-open:hover:not(:disabled) { background: #4f52e6; border-color: #4f52e6; }
+.period-change-btn:disabled {
+  background: #f5f6f8;
+  border-color: #e4e8ef;
+  color: #a8b0bd;
+  cursor: not-allowed;
+}
 
 /* 기간 라디오 (레거시 — 팝오버 안 fieldset용) */
 .duration-block { margin-bottom: 16px; position: relative; }
@@ -332,6 +338,12 @@ header h1 { font-size: 26px; margin: 0 0 8px; font-weight: 700; }
   border: 1px solid #c5d4f9;
   border-radius: 12px;
   background: #f1f5ff;
+  transition: border-color 120ms, background 120ms;
+}
+.file-loaded.is-dragging {
+  border-color: #6366f1;
+  background: #e7edff;
+  border-style: dashed;
 }
 .file-loaded .file-icon-wrap { color: #6366f1; flex-shrink: 0; }
 .file-loaded .file-meta { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -365,6 +377,43 @@ header h1 { font-size: 26px; margin: 0 0 8px; font-weight: 700; }
 .status.is-info    { background: #dce7ff; border-color: #6690f2; color: #1a3e9c; }
 .status.is-success { background: #c9ebd6; border-color: #4caf6f; color: #155d2e; }
 .status.is-error   { background: #fbd1d1; border-color: #de6b6b; color: #8f1414; }
+
+.status.has-progress {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.status.has-progress .status-msg { flex: 1; }
+.status.has-progress .status-progress {
+  flex-shrink: 0;
+  width: 120px;
+  height: 3px;
+  background: rgba(26, 62, 156, 0.2);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+.status.has-progress .status-progress-fill {
+  display: block;
+  height: 100%;
+  background: #1a3e9c;
+  border-radius: 2px;
+  transition: width 0.2s ease-out;
+}
+.status.has-progress .status-progress.indeterminate::before {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0; left: -35%;
+  width: 35%;
+  background: #1a3e9c;
+  border-radius: 2px;
+  animation: status-progress-slide 1.2s ease-in-out infinite;
+}
+@keyframes status-progress-slide {
+  0%   { left: -35%; width: 35%; }
+  50%  { width: 50%; }
+  100% { left: 100%; width: 35%; }
+}
 
 /* result — 기본 상태 (파일 없음): 강조 없음 */
 .result-section.is-empty {
