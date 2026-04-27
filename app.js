@@ -110,8 +110,28 @@ function formatDuration(startMs, endMs) {
 
 let _historyCache = [];
 
+const PASSCODE_KEY = 'mnl_history_passcode';
+const LAST_REPORT_TS_KEY = 'mnl_last_report_ts';
+
+function getStoredPasscode() {
+  return sessionStorage.getItem(PASSCODE_KEY) || '';
+}
+
+function authHeaders() {
+  const pw = getStoredPasscode();
+  return pw ? { 'X-Passcode': pw } : {};
+}
+
 async function fetchHistoryFromApi() {
-  const res = await fetch('/api/reports', { headers: { 'Accept': 'application/json' } });
+  const res = await fetch('/api/reports', { headers: { 'Accept': 'application/json', ...authHeaders() } });
+  if (res.status === 401) {
+    // 비밀번호가 만료됐거나 잘못됨 — 잠금 상태로 강제 복귀
+    sessionStorage.removeItem(PASSCODE_KEY);
+    sessionStorage.removeItem('mnl_history_unlocked');
+    _historyUnlocked = false;
+    if (typeof applyHistoryLockState === 'function') applyHistoryLockState();
+    throw new Error('Unauthorized');
+  }
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return await res.json();
 }
@@ -124,8 +144,17 @@ function loadHistoryLocal() {
 }
 
 async function loadHistory() {
+  // 잠금 상태(비밀번호 미설정)면 서버 호출 생략 — 401 방지 + 로그 깨끗하게
+  if (!getStoredPasscode()) {
+    _historyCache = [];
+    return _historyCache;
+  }
   try {
     _historyCache = await fetchHistoryFromApi();
+    // 마지막 보고 시각은 다음 잠금 상태에서도 노출되도록 localStorage에 캐시
+    if (_historyCache.length > 0) {
+      try { localStorage.setItem(LAST_REPORT_TS_KEY, _historyCache[0].createdAt); } catch {}
+    }
   } catch (err) {
     console.warn('[history] API 실패, localStorage로 폴백:', err.message);
     _historyCache = loadHistoryLocal();
@@ -137,11 +166,17 @@ async function saveHistoryEntry(entry) {
   try {
     const res = await fetch('/api/reports', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify(entry),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    await loadHistory();
+    // 잠금 상태에서도 저장은 가능 — 단 잠금 상태면 서버 재조회 못 하므로 로컬 낙관적 갱신
+    if (getStoredPasscode()) {
+      await loadHistory();
+    } else {
+      _historyCache = [{ id: 0, ...entry }, ..._historyCache].slice(0, HISTORY_MAX_ITEMS);
+      try { localStorage.setItem(LAST_REPORT_TS_KEY, entry.createdAt); } catch {}
+    }
     return;
   } catch (err) {
     console.warn('[history] API 저장 실패, localStorage로 폴백:', err.message);
@@ -160,7 +195,7 @@ async function deleteHistoryEntry(entry) {
   // D1: id로 삭제
   if (entry && entry.id !== undefined) {
     try {
-      const res = await fetch(`/api/reports/${entry.id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/reports/${entry.id}`, { method: 'DELETE', headers: authHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       await loadHistory();
       return;
@@ -182,7 +217,7 @@ async function deleteHistoryEntry(entry) {
 
 async function clearAllHistory() {
   try {
-    const res = await fetch('/api/reports', { method: 'DELETE' });
+    const res = await fetch('/api/reports', { method: 'DELETE', headers: authHeaders() });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     await loadHistory();
     return;
@@ -194,7 +229,10 @@ async function clearAllHistory() {
 }
 
 function getLastReportTime() {
-  return _historyCache.length > 0 ? new Date(_historyCache[0].createdAt) : null;
+  if (_historyCache.length > 0) return new Date(_historyCache[0].createdAt);
+  // 잠금 상태에서도 컨텍스트 유지를 위해 localStorage 캐시 사용
+  const cached = localStorage.getItem(LAST_REPORT_TS_KEY);
+  return cached ? new Date(cached) : null;
 }
 
 // ============================================================================
@@ -1360,21 +1398,39 @@ function applyHistoryLockState() {
   if (sub) sub.classList.toggle('hidden', !_historyUnlocked);
 }
 
-function attemptUnlock() {
+async function attemptUnlock() {
   const pw = (HISTORY_PASSCODE_INPUT.value || '').trim();
   if (!pw) return;
-  // TEMP: 클라이언트 하드코딩 — 추후 서버 검증으로 교체 예정
-  if (pw === '!yonhap@2') {
-    _historyUnlocked = true;
+  HISTORY_UNLOCK_BTN.disabled = true;
+  HISTORY_LOCK_MSG.classList.add('hidden');
+  try {
+    const res = await fetch('/api/reports', { headers: { 'X-Passcode': pw, 'Accept': 'application/json' } });
+    if (res.status === 401) {
+      HISTORY_LOCK_MSG.textContent = '비밀번호가 올바르지 않습니다.';
+      HISTORY_LOCK_MSG.classList.remove('hidden');
+      HISTORY_PASSCODE_INPUT.focus();
+      HISTORY_PASSCODE_INPUT.select();
+      return;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const rows = await res.json();
+    // 비밀번호 유효 — sessionStorage에 저장하고 캐시 갱신
+    sessionStorage.setItem(PASSCODE_KEY, pw);
     sessionStorage.setItem('mnl_history_unlocked', '1');
+    _historyUnlocked = true;
+    _historyCache = rows;
+    if (rows.length > 0) {
+      try { localStorage.setItem(LAST_REPORT_TS_KEY, rows[0].createdAt); } catch {}
+    }
     HISTORY_PASSCODE_INPUT.value = '';
-    HISTORY_LOCK_MSG.classList.add('hidden');
     applyHistoryLockState();
-  } else {
-    HISTORY_LOCK_MSG.textContent = '비밀번호가 올바르지 않습니다.';
+    renderHistoryList();
+    refreshPeriodUI();
+  } catch (err) {
+    HISTORY_LOCK_MSG.textContent = `검증 실패: ${err.message}`;
     HISTORY_LOCK_MSG.classList.remove('hidden');
-    HISTORY_PASSCODE_INPUT.focus();
-    HISTORY_PASSCODE_INPUT.select();
+  } finally {
+    HISTORY_UNLOCK_BTN.disabled = false;
   }
 }
 
@@ -1385,7 +1441,12 @@ HISTORY_PASSCODE_INPUT.addEventListener('keydown', (e) => {
 HISTORY_LOCK_BTN.addEventListener('click', () => {
   _historyUnlocked = false;
   sessionStorage.removeItem('mnl_history_unlocked');
+  sessionStorage.removeItem(PASSCODE_KEY);
+  // 잠금 후엔 메모리 캐시 비우기 — 마지막 시각만 localStorage에 남아있음
+  _historyCache = [];
   applyHistoryLockState();
+  renderHistoryList();
+  refreshPeriodUI();
 });
 
 // 초기 렌더 — API에서 기록 불러온 뒤 UI 업데이트

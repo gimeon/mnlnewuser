@@ -7,7 +7,17 @@ function json(body, status = 200) {
   });
 }
 
+function requirePasscode(context) {
+  const expected = context.env.HISTORY_PASSCODE;
+  if (!expected) return null;
+  const got = context.request.headers.get('X-Passcode');
+  if (got !== expected) return json({ error: 'unauthorized' }, 401);
+  return null;
+}
+
 export async function onRequestDelete(context) {
+  const denied = requirePasscode(context);
+  if (denied) return denied;
   const db = context.env.DB;
   if (!db) return json({ error: 'D1 DB가 바인딩되지 않았습니다.' }, 500);
   const id = Number(context.params.id);

@@ -35,7 +35,24 @@ function json(body, status = 200) {
   });
 }
 
+// HISTORY_PASSCODE 환경변수와 X-Passcode 헤더를 비교. 일치하면 null, 아니면 401 응답 반환.
+function requirePasscode(context) {
+  const expected = context.env.HISTORY_PASSCODE;
+  if (!expected) {
+    // 환경변수 미설정이면 사실상 잠금 해제된 상태 — 운영 실수 방지용 명시 로그
+    console.warn('[auth] HISTORY_PASSCODE env var 미설정. 모든 요청 통과.');
+    return null;
+  }
+  const got = context.request.headers.get('X-Passcode');
+  if (got !== expected) {
+    return json({ error: 'unauthorized' }, 401);
+  }
+  return null;
+}
+
 export async function onRequestGet(context) {
+  const denied = requirePasscode(context);
+  if (denied) return denied;
   const db = context.env.DB;
   if (!db) return json({ error: 'D1 DB가 바인딩되지 않았습니다 (Pages Settings → Bindings에서 DB로 연결).' }, 500);
   try {
@@ -74,6 +91,8 @@ export async function onRequestPost(context) {
 }
 
 export async function onRequestDelete(context) {
+  const denied = requirePasscode(context);
+  if (denied) return denied;
   const db = context.env.DB;
   if (!db) return json({ error: 'D1 DB가 바인딩되지 않았습니다.' }, 500);
   try {
