@@ -144,9 +144,12 @@ function loadHistoryLocal() {
 }
 
 async function loadHistory() {
-  // 잠금 상태(비밀번호 미설정)면 서버 호출 생략 — 401 방지 + 로그 깨끗하게
+  // 잠금 상태면 서버 호출은 생략하되 localStorage 폴백은 시도 (로컬 개발 + 오프라인 케이스)
   if (!getStoredPasscode()) {
-    _historyCache = [];
+    _historyCache = loadHistoryLocal();
+    if (_historyCache.length > 0) {
+      try { localStorage.setItem(LAST_REPORT_TS_KEY, _historyCache[0].createdAt); } catch {}
+    }
     return _historyCache;
   }
   try {
@@ -1280,12 +1283,19 @@ function reconcileSavedState() {
 function renderLockedLastInfo() {
   const el = document.getElementById('historyLockedLastInfo');
   if (!el) return;
-  if (!_historyCache || _historyCache.length === 0) {
-    el.innerHTML = '<span style="color:#8a94a4;">아직 저장된 보고가 없습니다.</span>';
+  // 1) 메모리 캐시 → 2) LAST_REPORT_TS_KEY 캐시 → 3) localStorage 보고 기록(로컬 개발/폴백) 순으로 시도
+  let lastTs = null;
+  if (_historyCache && _historyCache.length > 0) lastTs = _historyCache[0].createdAt;
+  if (!lastTs) lastTs = localStorage.getItem(LAST_REPORT_TS_KEY);
+  if (!lastTs) {
+    const local = loadHistoryLocal();
+    if (local.length > 0) lastTs = local[0].createdAt;
+  }
+  if (!lastTs) {
+    el.innerHTML = '<span style="color:#8a94a4;">잠금 해제 후 마지막 보고 시각이 표시됩니다.</span>';
     return;
   }
-  const last = _historyCache[0];
-  el.innerHTML = `마지막 보고 기준 시각: <strong class="accent-latest">${escapeHtml(formatLocalFull(new Date(last.createdAt)))}</strong>`;
+  el.innerHTML = `마지막 보고 기준 시각: <strong class="accent-latest">${escapeHtml(formatLocalFull(new Date(lastTs)))}</strong>`;
 }
 
 function renderHistoryList() {
