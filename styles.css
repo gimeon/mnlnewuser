@@ -450,6 +450,32 @@ header h1 { font-size: 26px; margin: 0 0 8px; font-weight: 700; }
 .result-actions { display: flex; gap: 8px; align-items: stretch; }
 
 .save-wrap { position: relative; }
+.save-wrap[data-tooltip]:hover::before {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: #1b1f24;
+  color: #fff;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 50;
+}
+.save-wrap[data-tooltip]:hover::after {
+  content: '';
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: #1b1f24;
+  pointer-events: none;
+  z-index: 50;
+}
 
 .popover {
   position: absolute;
@@ -562,6 +588,57 @@ header h1 { font-size: 26px; margin: 0 0 8px; font-weight: 700; }
   align-items: center;
   margin-bottom: 12px;
 }
+
+/* 보고 기록 잠금 영역 */
+.history-locked {
+  text-align: center;
+  padding: 40px 24px;
+  background: #fafbfc;
+  border: 1px dashed #d0d5de;
+  border-radius: 10px;
+  color: #5a6271;
+}
+.history-locked .lock-icon { font-size: 36px; margin-bottom: 10px; opacity: 0.7; }
+.history-locked p { margin: 0 0 16px; font-size: 13px; line-height: 1.7; }
+.lock-input-row {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  max-width: 320px;
+  margin: 0 auto;
+}
+.lock-input-row input {
+  flex: 1;
+  padding: 9px 11px;
+  border: 1px solid #d0d5de;
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  background: #fff;
+}
+.lock-input-row input:focus {
+  outline: none;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99,102,241,0.15);
+}
+.lock-msg { margin-top: 10px; font-size: 12px; color: #b32020; }
+.locked-last-info {
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: #5a6271;
+}
+.locked-last-info strong { color: #1b1f24; }
+.locked-last-info .accent-latest { color: #f59e0b; }
+.btn-icon-lock {
+  background: transparent;
+  border: 1px solid transparent;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-family: inherit;
+}
+.btn-icon-lock:hover { background: #f5f6f8; border-color: #e4e8ef; }
 .history-section h2 { margin: 0; font-size: 16px; font-weight: 700; }
 .history-sub { font-size: 13px; font-weight: 400; color: #8a94a4; margin-left: 6px; }
 .history-list { display: flex; flex-direction: column; gap: 10px; }

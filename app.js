@@ -33,6 +33,11 @@ const FILE_INPUT        = $('fileInput');
 const COPY_BTN          = $('copyBtn');
 const SAVE_RECORD_BTN   = $('saveRecordBtn');
 const HISTORY_LIST      = $('historyList');
+const HISTORY_LOCKED    = $('historyLocked');
+const HISTORY_LOCK_BTN  = $('historyLockBtn');
+const HISTORY_UNLOCK_BTN= $('historyUnlockBtn');
+const HISTORY_PASSCODE_INPUT = $('historyPasscodeInput');
+const HISTORY_LOCK_MSG  = $('historyLockMsg');
 const LAST_REPORT_DISP  = $('lastReportDisplay');
 const FILE_LOADED       = $('fileLoaded');
 const LOADED_FILE_NAME  = $('loadedFileName');
@@ -48,6 +53,7 @@ const POPOVER_CONFIRM   = $('popoverConfirmBtn');
 let currentRows = null;     // 최근 파싱된 엑셀 행들
 let currentReport = null;   // 최근 생성된 보고 텍스트/엔트리
 let isBusy = false;         // 파일 로드/파싱 중이면 true
+let _lastSavedReportText = null; // 직전에 저장한 보고 본문 — 동일 본문 중복 저장 방지
 
 function setBusy(flag) {
   isBusy = flag;
@@ -857,7 +863,9 @@ function resetResultToEmpty() {
   RESULT_TEXT.textContent = '엑셀 파일을 업로드하고 집계 기간을 설정하면 여기에 일간 보고 문장이 생성됩니다.';
   DEBUG_AREA.innerHTML = '';
   SAVE_RECORD_BTN.disabled = true;
+  SAVE_RECORD_BTN.parentElement.removeAttribute('data-tooltip');
   COPY_BTN.disabled = true;
+  _lastSavedReportText = null;
 }
 
 function showFileLoaded(file) {
@@ -1035,7 +1043,12 @@ function renderReport(opts = {}) {
 
   RESULT_SECTION.classList.remove('is-empty');
   RESULT_TEXT.textContent = report.text;
-  SAVE_RECORD_BTN.disabled = false;
+  // 직전에 저장한 본문과 동일하면 저장 버튼 비활성화 (중복 저장 방지)
+  const sameAsSaved = (_lastSavedReportText !== null && _lastSavedReportText === report.text);
+  SAVE_RECORD_BTN.disabled = sameAsSaved;
+  const saveWrap = SAVE_RECORD_BTN.parentElement;
+  if (sameAsSaved) saveWrap.setAttribute('data-tooltip', '이미 저장됨');
+  else saveWrap.removeAttribute('data-tooltip');
   COPY_BTN.disabled = false;
   renderDebugTable(report.entries);
   // 파일 로드 흐름에서 호출된 경우에만 복사 버튼으로 포커스
@@ -1185,6 +1198,9 @@ async function confirmSavePopover() {
   try {
     await saveHistoryEntry(entry);
     _justAddedEntry = true;
+    _lastSavedReportText = entry.reportText;
+    SAVE_RECORD_BTN.disabled = true;
+    SAVE_RECORD_BTN.parentElement.setAttribute('data-tooltip', '이미 저장됨');
     renderHistoryList();
     refreshPeriodUI();
     closeSavePopover();
@@ -1210,7 +1226,33 @@ POPOVER_AUTHOR.addEventListener('keydown', (e) => {
 let historyShowAll = false;
 let _justAddedEntry = false; // 저장 직후 첫 항목에 진입 애니메이션 부여용 플래그
 
+// 저장된 본문이 보고 기록에서 사라졌으면(삭제됐으면) "이미 저장됨" 상태 해제
+function reconcileSavedState() {
+  if (!_lastSavedReportText) return;
+  const stillThere = _historyCache && _historyCache.some((e) => e.reportText === _lastSavedReportText);
+  if (!stillThere) {
+    _lastSavedReportText = null;
+    if (currentReport) {
+      SAVE_RECORD_BTN.disabled = false;
+      SAVE_RECORD_BTN.parentElement.removeAttribute('data-tooltip');
+    }
+  }
+}
+
+function renderLockedLastInfo() {
+  const el = document.getElementById('historyLockedLastInfo');
+  if (!el) return;
+  if (!_historyCache || _historyCache.length === 0) {
+    el.innerHTML = '<span style="color:#8a94a4;">아직 저장된 보고가 없습니다.</span>';
+    return;
+  }
+  const last = _historyCache[0];
+  el.innerHTML = `마지막 보고 기준 시각: <strong class="accent-latest">${escapeHtml(formatLocalFull(new Date(last.createdAt)))}</strong>`;
+}
+
 function renderHistoryList() {
+  reconcileSavedState();
+  renderLockedLastInfo();
   const list = _historyCache;
   if (list.length === 0) {
     HISTORY_LIST.innerHTML = '<p class="empty">아직 저장된 기록이 없습니다.</p>';
@@ -1271,6 +1313,8 @@ function renderHistoryList() {
         await deleteHistoryEntry(entry);
         renderHistoryList();
         refreshPeriodUI();
+        // 삭제로 인해 lastReport 시각이 바뀌었을 수 있으므로 보고/상태 메시지 재계산
+        if (currentRows) renderReport();
       } finally {
         el.disabled = false;
       }
@@ -1301,8 +1345,52 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// ============================================================================
+// 보고 기록 잠금 (UI 데모) — 임시 하드코딩 비밀번호 'demo'
+// 추후 서버(Pages Function)에서 X-Passcode 헤더 검증으로 교체 예정
+// ============================================================================
+
+let _historyUnlocked = sessionStorage.getItem('mnl_history_unlocked') === '1';
+
+function applyHistoryLockState() {
+  HISTORY_LOCKED.classList.toggle('hidden', _historyUnlocked);
+  HISTORY_LIST.classList.toggle('hidden', !_historyUnlocked);
+  HISTORY_LOCK_BTN.classList.toggle('hidden', !_historyUnlocked);
+  const sub = document.getElementById('historySub');
+  if (sub) sub.classList.toggle('hidden', !_historyUnlocked);
+}
+
+function attemptUnlock() {
+  const pw = (HISTORY_PASSCODE_INPUT.value || '').trim();
+  if (!pw) return;
+  // TEMP: 클라이언트 하드코딩 — 추후 서버 검증으로 교체 예정
+  if (pw === '!yonhap@2') {
+    _historyUnlocked = true;
+    sessionStorage.setItem('mnl_history_unlocked', '1');
+    HISTORY_PASSCODE_INPUT.value = '';
+    HISTORY_LOCK_MSG.classList.add('hidden');
+    applyHistoryLockState();
+  } else {
+    HISTORY_LOCK_MSG.textContent = '비밀번호가 올바르지 않습니다.';
+    HISTORY_LOCK_MSG.classList.remove('hidden');
+    HISTORY_PASSCODE_INPUT.focus();
+    HISTORY_PASSCODE_INPUT.select();
+  }
+}
+
+HISTORY_UNLOCK_BTN.addEventListener('click', attemptUnlock);
+HISTORY_PASSCODE_INPUT.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); attemptUnlock(); }
+});
+HISTORY_LOCK_BTN.addEventListener('click', () => {
+  _historyUnlocked = false;
+  sessionStorage.removeItem('mnl_history_unlocked');
+  applyHistoryLockState();
+});
+
 // 초기 렌더 — API에서 기록 불러온 뒤 UI 업데이트
 (async () => {
+  applyHistoryLockState();
   await loadHistory();
   refreshPeriodUI();
   toggleCustomStartVisibility();
