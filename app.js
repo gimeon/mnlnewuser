@@ -1408,11 +1408,33 @@ function applyHistoryLockState() {
   if (sub) sub.classList.toggle('hidden', !_historyUnlocked);
 }
 
+// localhost 등 로컬 개발 환경에선 Pages Functions가 없어 서버 검증을 못 한다.
+// 로컬 데이터는 본인 브라우저 localStorage에만 존재하므로 게이트는 UI 수준으로만 동작.
+const IS_LOCAL_DEV = ['localhost', '127.0.0.1', ''].includes(location.hostname);
+
 async function attemptUnlock() {
   const pw = (HISTORY_PASSCODE_INPUT.value || '').trim();
   if (!pw) return;
   HISTORY_UNLOCK_BTN.disabled = true;
   HISTORY_LOCK_MSG.classList.add('hidden');
+
+  // 로컬 개발: 서버 검증 우회 — 입력한 어떤 값으로도 통과 (UI 미리보기 전용)
+  if (IS_LOCAL_DEV) {
+    sessionStorage.setItem(PASSCODE_KEY, pw);
+    sessionStorage.setItem('mnl_history_unlocked', '1');
+    _historyUnlocked = true;
+    _historyCache = loadHistoryLocal();
+    if (_historyCache.length > 0) {
+      try { localStorage.setItem(LAST_REPORT_TS_KEY, _historyCache[0].createdAt); } catch {}
+    }
+    HISTORY_PASSCODE_INPUT.value = '';
+    applyHistoryLockState();
+    renderHistoryList();
+    refreshPeriodUI();
+    HISTORY_UNLOCK_BTN.disabled = false;
+    return;
+  }
+
   try {
     const res = await fetch('/api/reports', { headers: { 'X-Passcode': pw, 'Accept': 'application/json' } });
     if (res.status === 401) {
