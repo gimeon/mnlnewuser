@@ -231,6 +231,18 @@ async function clearAllHistory() {
   _historyCache = [];
 }
 
+// 비밀번호 없이도 마지막 보고 시각만 가져와 캐시에 저장 — "집계 시작점" 컨텍스트 유지용
+async function loadLastReportTimestamp() {
+  try {
+    const res = await fetch('/api/last-report-time', { headers: { Accept: 'application/json' } });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data && data.lastCreatedAt) {
+      try { localStorage.setItem(LAST_REPORT_TS_KEY, data.lastCreatedAt); } catch {}
+    }
+  } catch {}
+}
+
 function getLastReportTime() {
   if (_historyCache.length > 0) return new Date(_historyCache[0].createdAt);
   // 잠금 상태에서도 컨텍스트 유지를 위해 localStorage 캐시 사용
@@ -1484,6 +1496,8 @@ HISTORY_LOCK_BTN.addEventListener('click', () => {
 // 초기 렌더 — API에서 기록 불러온 뒤 UI 업데이트
 (async () => {
   applyHistoryLockState();
+  // 잠금 상태에서도 마지막 보고 시각은 공개 엔드포인트로 가져와 시작점 컨텍스트 유지
+  if (!getStoredPasscode()) await loadLastReportTimestamp();
   await loadHistory();
   refreshPeriodUI();
   toggleCustomStartVisibility();
