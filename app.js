@@ -145,11 +145,10 @@ function loadHistoryLocal() {
 
 async function loadHistory() {
   // 잠금 상태면 서버 호출은 생략하되 localStorage 폴백은 시도 (로컬 개발 + 오프라인 케이스)
+  // LAST_REPORT_TS_KEY는 loadLastReportTimestamp()가 공개 엔드포인트에서 받아 관리.
+  // 여기서 stale한 localStorage 잔재 데이터로 덮어쓰지 않는다.
   if (!getStoredPasscode()) {
     _historyCache = loadHistoryLocal();
-    if (_historyCache.length > 0) {
-      try { localStorage.setItem(LAST_REPORT_TS_KEY, _historyCache[0].createdAt); } catch {}
-    }
     return _historyCache;
   }
   try {
@@ -244,10 +243,11 @@ async function loadLastReportTimestamp() {
 }
 
 function getLastReportTime() {
+  // 우선순위: 공개 엔드포인트가 채운 LAST_REPORT_TS_KEY > 메모리 _historyCache(오래된 localStorage 잔재일 수 있음)
+  const fresh = localStorage.getItem(LAST_REPORT_TS_KEY);
+  if (fresh) return new Date(fresh);
   if (_historyCache.length > 0) return new Date(_historyCache[0].createdAt);
-  // 잠금 상태에서도 컨텍스트 유지를 위해 localStorage 캐시 사용
-  const cached = localStorage.getItem(LAST_REPORT_TS_KEY);
-  return cached ? new Date(cached) : null;
+  return null;
 }
 
 // ============================================================================
@@ -1295,10 +1295,9 @@ function reconcileSavedState() {
 function renderLockedLastInfo() {
   const el = document.getElementById('historyLockedLastInfo');
   if (!el) return;
-  // 1) 메모리 캐시 → 2) LAST_REPORT_TS_KEY 캐시 → 3) localStorage 보고 기록(로컬 개발/폴백) 순으로 시도
-  let lastTs = null;
-  if (_historyCache && _historyCache.length > 0) lastTs = _historyCache[0].createdAt;
-  if (!lastTs) lastTs = localStorage.getItem(LAST_REPORT_TS_KEY);
+  // 우선순위: 1) 공개 엔드포인트가 채운 LAST_REPORT_TS_KEY → 2) 메모리 캐시 → 3) localStorage 보고 기록(로컬 개발/오프라인 폴백)
+  let lastTs = localStorage.getItem(LAST_REPORT_TS_KEY);
+  if (!lastTs && _historyCache && _historyCache.length > 0) lastTs = _historyCache[0].createdAt;
   if (!lastTs) {
     const local = loadHistoryLocal();
     if (local.length > 0) lastTs = local[0].createdAt;
